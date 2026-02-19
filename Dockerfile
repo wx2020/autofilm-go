@@ -1,5 +1,9 @@
+# 构建参数
+ARG VERSION=dev
+ARG GO_VERSION=1.23
+
 # 多阶段构建
-FROM golang:1.23-alpine AS builder
+FROM golang:${GO_VERSION}-alpine AS builder
 
 # 安装构建依赖
 RUN apk add --no-cache git gcc musl-dev
@@ -7,14 +11,20 @@ RUN apk add --no-cache git gcc musl-dev
 WORKDIR /build
 
 # 复制go mod文件
-COPY go.mod go.sum ./
+COPY go.mod go.sum* ./
 RUN go mod download
 
 # 复制源代码
 COPY . .
 
-# 编译
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o autofilm ./cmd/autofilm
+# 构建参数传递
+ARG VERSION
+
+# 编译，注入版本号
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -a -installsuffix cgo \
+    -ldflags="-w -s -X github.com/akimio/autofilm/internal/core.Version=${VERSION}" \
+    -o autofilm ./cmd/autofilm
 
 # 最终镜像
 FROM alpine:latest

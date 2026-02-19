@@ -9,11 +9,20 @@ import (
 	"github.com/spf13/viper"
 )
 
-const (
-	AppName    = "AutoFilm"
-	AppVersion = "v1.5.0-1"
-	DefaultTZ  = "Asia/Shanghai"
+var (
+	// Version can be set at build time using: -ldflags "-X main.Version=X.Y.Z"
+	Version = "v1.5.0-1"
 )
+
+const (
+	AppName   = "AutoFilm"
+	DefaultTZ = "Asia/Shanghai"
+)
+
+// AppVersion returns the current version
+func AppVersion() string {
+	return Version
+}
 
 var (
 	instance *SettingManager

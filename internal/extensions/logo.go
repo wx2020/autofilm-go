@@ -1,5 +1,7 @@
 package extensions
 
+import "github.com/akimio/autofilm/internal/core"
+
 // Logo 应用启动时显示的 Logo
 const Logo = `
       _           _            ____ ___
@@ -16,7 +18,7 @@ const Logo = `
 func PrintLogo(version string) {
 	println(Logo)
 	center := "═════════════════════════════════════════════════════════════════"
-	centerText := " " + AppName + " " + version + " "
+	centerText := " " + core.AppName + " " + version + " "
 
 	// 简单居中对齐
 	padding := (len(center) - len(centerText)) / 2
