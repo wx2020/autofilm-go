@@ -1,6 +1,6 @@
 # 构建参数
 ARG VERSION=dev
-ARG GO_VERSION=1.23
+ARG GO_VERSION=1.24
 
 # 多阶段构建
 FROM golang:${GO_VERSION}-alpine AS builder
