@@ -122,74 +122,74 @@ jobs:
 
           # 生成提交记录
           if [ -n "$PREV_TAG" ]; then
-            cat > changelog.md << EOF
-          ## 📝 本次更新内容
-
-          ### 自 ${PREV_TAG} 以来的提交记录：
-
-          EOF
-            git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" >> changelog.md
+            {
+              echo "## 📝 本次更新内容"
+              echo ""
+              echo "### 自 ${PREV_TAG} 以来的提交记录："
+              echo ""
+              git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)"
+            } > changelog.md
           else
-            cat > changelog.md << 'EOF'
-          ## 📝 本次更新内容
-
-          ### 首次发布！
-          EOF
+            {
+              echo "## 📝 本次更新内容"
+              echo ""
+              echo "### 首次发布！"
+            } > changelog.md
           fi
 
           # 生成完整的 release notes
-          cat > release_notes.md << 'MARKDOWN'
-          ## 🚀 AutoFilm ${{ steps.version.outputs.VERSION }}
-
-          ### 📦 Docker Image
-
-          ```bash
-          # 拉取特定版本
-          docker pull ghcr.io/wx2020/autofilm-go:${{ steps.version.outputs.VERSION }}
-
-          # 拉取最新版本
-          docker pull ghcr.io/wx2020/autofilm-go:latest
-          ```
-
-          ### 💾 二进制文件
-
-          下载下方附件中的 `${{ steps.version.outputs.VERSION }}` 版本二进制文件。
-
-          ### 使用方法
-
-          #### Docker 方式（推荐）
-
-          ```bash
-          docker run -d \
-            -v /path/to/config:/config \
-            -v /path/to/logs:/logs \
-            -v /path/to/fonts:/fonts \
-            -v /path/to/media:/media \
-            ghcr.io/wx2020/autofilm-go:${{ steps.version.outputs.VERSION }}
-          ```
-
-          #### 二进制文件方式
-
-          ```bash
-          # 解压
-          tar -xzf autofilm-linux-amd64.tar.gz
-
-          # 赋予执行权限
-          chmod +x autofilm-linux-amd64
-
-          # 运行
-          ./autofilm-linux-amd64
-          ```
-          MARKDOWN
-
-          # 合并 changelog 和 release notes
-          cat changelog.md >> release_notes.md
-
-          # 使用 EOF 文件语法设置输出
           {
-            echo 'notes<<EOF'
+            echo "## 🚀 AutoFilm ${{ steps.version.outputs.VERSION }}"
+            echo ""
+            echo "### 📦 Docker Image"
+            echo ""
+            echo '```bash'
+            echo "# 拉取特定版本"
+            echo "docker pull ghcr.io/wx2020/autofilm-go:${{ steps.version.outputs.VERSION }}"
+            echo ""
+            echo "# 拉取最新版本"
+            echo "docker pull ghcr.io/wx2020/autofilm-go:latest"
+            echo '```'
+            echo ""
+            echo "### 💾 二进制文件"
+            echo ""
+            echo "下载下方附件中的 \`${{ steps.version.outputs.VERSION }}\` 版本二进制文件。"
+            echo ""
+            echo "### 使用方法"
+            echo ""
+            echo "#### Docker 方式（推荐）"
+            echo ""
+            echo '```bash'
+            echo "docker run -d \\"
+            echo "  -v /path/to/config:/config \\"
+            echo "  -v /path/to/logs:/logs \\"
+            echo "  -v /path/to/fonts:/fonts \\"
+            echo "  -v /path/to/media:/media \\"
+            echo "  ghcr.io/wx2020/autofilm-go:${{ steps.version.outputs.VERSION }}"
+            echo '```'
+            echo ""
+            echo "#### 二进制文件方式"
+            echo ""
+            echo '```bash'
+            echo "# 解压"
+            echo "tar -xzf autofilm-linux-amd64.tar.gz"
+            echo ""
+            echo "# 赋予执行权限"
+            echo "chmod +x autofilm-linux-amd64"
+            echo ""
+            echo "# 运行"
+            echo "./autofilm-linux-amd64"
+            echo '```'
+            echo ""
+            cat changelog.md
+          } > release_notes.md
+
+          # 使用 delimiter 而不是 EOF 来避免冲突
+          delimiter="$(openssl rand -hex 8)"
+          {
+            echo "notes<<${delimiter}"
             cat release_notes.md
-            echo EOF
+            echo "${delimiter}"
           } >> $GITHUB_OUTPUT
 
       - name: Create Release
