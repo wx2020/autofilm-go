@@ -120,69 +120,22 @@ jobs:
           # 获取上一个标签
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
 
-          # 生成提交记录
+          # 生成提交记录（commit id 可点击链接）
           if [ -n "$PREV_TAG" ]; then
             {
               echo "## 📝 本次更新内容"
               echo ""
               echo "### 自 ${PREV_TAG} 以来的提交记录："
               echo ""
-              git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)"
-            } > changelog.md
+              git log ${PREV_TAG}..HEAD --pretty=format:"- %s ([%h](${{ github.server_url }}/${{ github.repository }}/commit/%H))"
+            } > release_notes.md
           else
             {
               echo "## 📝 本次更新内容"
               echo ""
               echo "### 首次发布！"
-            } > changelog.md
+            } > release_notes.md
           fi
-
-          # 生成完整的 release notes
-          {
-            echo "## 🚀 AutoFilm ${{ steps.version.outputs.VERSION }}"
-            echo ""
-            echo "### 📦 Docker Image"
-            echo ""
-            echo '```bash'
-            echo "# 拉取特定版本"
-            echo "docker pull ghcr.io/wx2020/autofilm-go:${{ steps.version.outputs.VERSION }}"
-            echo ""
-            echo "# 拉取最新版本"
-            echo "docker pull ghcr.io/wx2020/autofilm-go:latest"
-            echo '```'
-            echo ""
-            echo "### 💾 二进制文件"
-            echo ""
-            echo "下载下方附件中的 \`${{ steps.version.outputs.VERSION }}\` 版本二进制文件。"
-            echo ""
-            echo "### 使用方法"
-            echo ""
-            echo "#### Docker 方式（推荐）"
-            echo ""
-            echo '```bash'
-            echo "docker run -d \\"
-            echo "  -v /path/to/config:/config \\"
-            echo "  -v /path/to/logs:/logs \\"
-            echo "  -v /path/to/fonts:/fonts \\"
-            echo "  -v /path/to/media:/media \\"
-            echo "  ghcr.io/wx2020/autofilm-go:${{ steps.version.outputs.VERSION }}"
-            echo '```'
-            echo ""
-            echo "#### 二进制文件方式"
-            echo ""
-            echo '```bash'
-            echo "# 解压"
-            echo "tar -xzf autofilm-linux-amd64.tar.gz"
-            echo ""
-            echo "# 赋予执行权限"
-            echo "chmod +x autofilm-linux-amd64"
-            echo ""
-            echo "# 运行"
-            echo "./autofilm-linux-amd64"
-            echo '```'
-            echo ""
-            cat changelog.md
-          } > release_notes.md
 
           # 使用 base64 编码来避免所有特殊字符问题
           NOTES_CONTENT=$(cat release_notes.md)
