@@ -4,8 +4,8 @@
 *.dll
 *.so
 *.dylib
-autofilm
-autofilm-*
+/autofilm
+/autofilm-*
 
 # Test binary, built with `go test -c`
 *.test
