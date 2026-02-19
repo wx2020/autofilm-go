@@ -1,0 +1,31 @@
+# Git
+.git
+.gitignore
+
+# 文档
+*.md
+README.md
+LICENSE
+
+# 开发文件
+.vscode
+.idea
+*.swp
+*.swo
+
+# 构建输出
+bin/
+dist/
+
+# 日志
+logs/
+*.log
+
+# 配置（用户应该自己提供）
+config/*.yaml
+
+# 临时文件
+tmp/
+temp/
+.DS_Store
+Thumbs.db

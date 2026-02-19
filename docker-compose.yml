@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  autofilm:
+    image: akimio/autofilm-go:latest
+    container_name: autofilm
+    restart: unless-stopped
+
+    volumes:
+      - ./config:/config
+      - ./logs:/logs
+      - ./fonts:/fonts:ro
+      - ./media:/media
+
+    environment:
+      - TZ=Asia/Shanghai
+
+    # 如果需要查看日志
+    # logging:
+    #   driver: "json-file"
+    #   options:
+    #     max-size: "10m"
+    #     max-file: "3"
