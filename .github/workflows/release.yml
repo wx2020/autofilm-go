@@ -184,13 +184,13 @@ jobs:
             cat changelog.md
           } > release_notes.md
 
-          # 使用 delimiter 而不是 EOF 来避免冲突
-          delimiter="$(openssl rand -hex 8)"
+          # 使用 base64 编码来避免所有特殊字符问题
+          NOTES_CONTENT=$(cat release_notes.md)
           {
-            echo "notes<<${delimiter}"
-            cat release_notes.md
-            echo "${delimiter}"
-          } >> $GITHUB_OUTPUT
+            echo 'notes<<EOF'
+            echo "$NOTES_CONTENT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
