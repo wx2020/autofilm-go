@@ -10,8 +10,8 @@ import (
 )
 
 var (
-	// Version can be set at build time using: -ldflags "-X main.Version=X.Y.Z"
-	Version = "v1.5.0-1"
+	// Version can be set at build time using: -ldflags "-X github.com/akimio/autofilm/internal/core.Version=X.Y.Z"
+	Version = "dev"
 )
 
 const (
@@ -203,17 +203,23 @@ func (sm *SettingManager) GetTimezone() string {
 
 // GetAlistServerList 获取 Alist2Strm 服务器列表
 func (sm *SettingManager) GetAlistServerList() []map[string]interface{} {
-	return sm.viper.Get("Alist2StrmList").([]map[string]interface{})
+	var result []map[string]interface{}
+	sm.viper.UnmarshalKey("Alist2StrmList", &result)
+	return result
 }
 
 // GetAni2AlistList 获取 Ani2Alist 列表
 func (sm *SettingManager) GetAni2AlistList() []map[string]interface{} {
-	return sm.viper.Get("Ani2AlistList").([]map[string]interface{})
+	var result []map[string]interface{}
+	sm.viper.UnmarshalKey("Ani2AlistList", &result)
+	return result
 }
 
 // GetLibraryPosterList 获取 LibraryPoster 列表
 func (sm *SettingManager) GetLibraryPosterList() []map[string]interface{} {
-	return sm.viper.Get("LibraryPosterList").([]map[string]interface{})
+	var result []map[string]interface{}
+	sm.viper.UnmarshalKey("LibraryPosterList", &result)
+	return result
 }
 
 // ReloadConfig 重新加载配置文件
