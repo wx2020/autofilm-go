@@ -352,9 +352,15 @@ func (c *AlistClient) FSList(ctx context.Context, dirPath string) ([]AlistPath, 
 		// 获取文件的下载链接
 		if !result.Content[i].IsDir() {
 			fullPath := result.Content[i].FullPath
+			c.logger.Debugf("[DEBUG] 正在获取文件下载链接: %s", fullPath)
 			if fileDetail, err := c.FSGet(ctx, fullPath); err == nil && fileDetail != nil {
 				result.Content[i].DownloadURL = fileDetail.DownloadURL
 				result.Content[i].RawURL = fileDetail.RawURL
+				c.logger.Debugf("[DEBUG] 文件: %s", result.Content[i].Name)
+				c.logger.Debugf("[DEBUG]   DownloadURL: %s", result.Content[i].DownloadURL)
+				c.logger.Debugf("[DEBUG]   RawURL: %s", result.Content[i].RawURL)
+			} else {
+				c.logger.Warnf("[WARN] 获取文件下载链接失败: %s, 错误: %v", fullPath, err)
 			}
 		}
 	}
