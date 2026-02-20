@@ -343,11 +343,20 @@ func (c *AlistClient) FSList(ctx context.Context, dirPath string) ([]AlistPath, 
 		return nil, err
 	}
 
-	// 填充完整路径
+	// 填充完整路径和下载链接
 	for i := range result.Content {
 		result.Content[i].ServerURL = c.url
 		result.Content[i].BasePath = c.basePath
 		result.Content[i].FullPath = dirPath + "/" + result.Content[i].Name
+
+		// 获取文件的下载链接
+		if !result.Content[i].IsDir() {
+			fullPath := result.Content[i].FullPath
+			if fileDetail, err := c.FSGet(ctx, fullPath); err == nil && fileDetail != nil {
+				result.Content[i].DownloadURL = fileDetail.DownloadURL
+				result.Content[i].RawURL = fileDetail.RawURL
+			}
+		}
 	}
 
 	return result.Content, nil
