@@ -305,7 +305,7 @@ func (a2s *Alist2Strm) processFile(ctx context.Context, path *alist.AlistPath) {
 		a2s.logger.Infof("%s 创建成功", filepath.Base(localPath))
 	} else {
 		// 下载文件
-		if err := a2s.downloadFile(ctx, path.DownloadURL, localPath); err != nil {
+		if err := a2s.downloadFile(ctx, path.RawURL, localPath); err != nil {
 			a2s.logger.Errorf("下载文件失败: %v", err)
 			return
 		}
@@ -317,7 +317,7 @@ func (a2s *Alist2Strm) processFile(ctx context.Context, path *alist.AlistPath) {
 func (a2s *Alist2Strm) generateContent(path *alist.AlistPath) string {
 	switch a2s.mode {
 	case AlistURLMode:
-		content := path.DownloadURL
+		content := path.RawURL
 		if a2s.config.PublicURL != "" {
 			content = strings.Replace(content, a2s.config.URL, a2s.config.PublicURL, 1)
 		}
@@ -330,7 +330,7 @@ func (a2s *Alist2Strm) generateContent(path *alist.AlistPath) string {
 		return path.FullPath
 
 	default:
-		return path.DownloadURL
+		return path.RawURL
 	}
 }
 

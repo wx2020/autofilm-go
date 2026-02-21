@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	clients = make(map[string]*AlistClient)
+	clients   = make(map[string]*AlistClient)
 	clientsMu sync.RWMutex
 )
 
@@ -37,16 +37,15 @@ type AlistClient struct {
 
 // AlistPath Alist文件路径信息
 type AlistPath struct {
-	ServerURL   string `json:"-"`
-	BasePath    string `json:"-"`
-	FullPath    string `json:"full_path"`
-	Name        string `json:"name"`
-	Size        int64  `json:"size"`
-	Type        int    `json:"type"` // 1: 文件夹, 0: 文件
-	Modified    string `json:"modified"`
-	DownloadURL string `json:"raw_url,omitempty"`
-	RawURL      string `json:"raw_url,omitempty"`
-	Thumb       string `json:"thumb,omitempty"`
+	ServerURL string `json:"-"`
+	BasePath  string `json:"-"`
+	FullPath  string `json:"full_path"`
+	Name      string `json:"name"`
+	Size      int64  `json:"size"`
+	Type      int    `json:"type"` // 1: 文件夹, 0: 文件
+	Modified  string `json:"modified"`
+	RawURL    string `json:"raw_url,omitempty"`
+	Thumb     string `json:"thumb,omitempty"`
 }
 
 // IsDir 判断是否为目录
@@ -76,23 +75,23 @@ func (p *AlistPath) ModifiedTimestamp() int64 {
 
 // AlistStorage Alist存储信息
 type AlistStorage struct {
-	ID                int    `json:"id"`
-	MountPath         string `json:"mount_path"`
-	Order             int    `json:"order"`
-	Remark            string `json:"remark"`
-	Driver            string `json:"driver"`
-	CacheExpiration   int    `json:"cache_expiration"`
-	Status            string `json:"status"`
-	Addition          string `json:"addition"`
-	Modified          string `json:"modified"`
-	Disabled          bool   `json:"disabled"`
-	EnableSign        bool   `json:"enable_sign"`
-	OrderBy           string `json:"order_by"`
-	OrderDirection    string `json:"order_direction"`
-	ExtractFolder     string `json:"extract_folder"`
-	WebProxy          bool   `json:"web_proxy"`
-	WebdavPolicy      string `json:"webdav_policy"`
-	DownProxyURL      string `json:"down_proxy_url"`
+	ID              int    `json:"id"`
+	MountPath       string `json:"mount_path"`
+	Order           int    `json:"order"`
+	Remark          string `json:"remark"`
+	Driver          string `json:"driver"`
+	CacheExpiration int    `json:"cache_expiration"`
+	Status          string `json:"status"`
+	Addition        string `json:"addition"`
+	Modified        string `json:"modified"`
+	Disabled        bool   `json:"disabled"`
+	EnableSign      bool   `json:"enable_sign"`
+	OrderBy         string `json:"order_by"`
+	OrderDirection  string `json:"order_direction"`
+	ExtractFolder   string `json:"extract_folder"`
+	WebProxy        bool   `json:"web_proxy"`
+	WebdavPolicy    string `json:"webdav_policy"`
+	DownProxyURL    string `json:"down_proxy_url"`
 }
 
 // Addition2dict 将Addition JSON字符串转换为字典
@@ -118,14 +117,14 @@ func (s *AlistStorage) SetAdditionByDict(data map[string]interface{}) error {
 
 // APIResponse Alist API响应
 type APIResponse struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data"`
 }
 
 // FSListResponse 文件列表响应
 type FSListResponse struct {
-	Total   int        `json:"total"`
+	Total   int         `json:"total"`
 	Content []AlistPath `json:"content"`
 }
 
@@ -354,10 +353,9 @@ func (c *AlistClient) FSList(ctx context.Context, dirPath string) ([]AlistPath, 
 			fullPath := result.Content[i].FullPath
 			c.logger.Debugf("[DEBUG] 正在获取文件下载链接: %s", fullPath)
 			if fileDetail, err := c.FSGet(ctx, fullPath); err == nil && fileDetail != nil {
-				result.Content[i].DownloadURL = fileDetail.DownloadURL
+				result.Content[i].RawURL = fileDetail.RawURL
 				result.Content[i].RawURL = fileDetail.RawURL
 				c.logger.Debugf("[DEBUG] 文件: %s", result.Content[i].Name)
-				c.logger.Debugf("[DEBUG]   DownloadURL: %s", result.Content[i].DownloadURL)
 				c.logger.Debugf("[DEBUG]   RawURL: %s", result.Content[i].RawURL)
 			} else {
 				c.logger.Warnf("[WARN] 获取文件下载链接失败: %s, 错误: %v", fullPath, err)
@@ -381,19 +379,29 @@ func (c *AlistClient) FSGet(ctx context.Context, path string) (*AlistPath, error
 	}
 
 	jsonData, _ := json.Marshal(req)
+	c.logger.Debugf("[DEBUG] FSGet 请求路径: %s", path)
+	c.logger.Debugf("[DEBUG] FSGet 请求数据: %s", string(jsonData))
+
 	resp, err := c.doRequest(ctx, "POST", "/api/fs/get", jsonData)
 	if err != nil {
+		c.logger.Errorf("[ERROR] FSGet 请求失败: %v", err)
 		return nil, err
 	}
 
+	c.logger.Debugf("[DEBUG] FSGet 响应码: %d", resp.Code)
+	c.logger.Debugf("[DEBUG] FSGet 原始响应: %s", string(resp.Data))
+
 	var result AlistPath
 	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		c.logger.Errorf("[ERROR] FSGet JSON 解析失败: %v, 原始数据: %s", err, string(resp.Data))
 		return nil, err
 	}
 
 	result.ServerURL = c.url
 	result.BasePath = c.basePath
 	result.FullPath = path
+
+	c.logger.Debugf("[DEBUG] FSGet 解析后 - RawURL: '%s'", result.RawURL)
 
 	return &result, nil
 }
