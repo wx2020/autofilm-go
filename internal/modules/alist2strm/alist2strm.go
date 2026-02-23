@@ -13,6 +13,7 @@ import (
 	"github.com/akimio/autofilm/internal/core"
 	"github.com/akimio/autofilm/internal/extensions"
 	"github.com/akimio/autofilm/pkg/alist"
+	"github.com/akimio/autofilm/pkg/httpclient"
 	"github.com/sirupsen/logrus"
 )
 
@@ -336,9 +337,8 @@ func (a2s *Alist2Strm) generateContent(path *alist.AlistPath) string {
 
 // downloadFile 下载文件
 func (a2s *Alist2Strm) downloadFile(ctx context.Context, url, filePath string) error {
-	// 使用HTTP客户端下载
-	// 这里简化实现，实际应该使用httpclient包
-	return fmt.Errorf("下载功能待实现")
+	client := httpclient.GetClient()
+	return client.Download(ctx, url, filePath, nil)
 }
 
 // getLocalPath 获取本地文件路径
