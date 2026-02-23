@@ -33,6 +33,7 @@ type Config struct {
 	Timeout    time.Duration
 	MaxRetries int
 	UserAgent  string
+	Logger     *logrus.Logger
 }
 
 // DefaultConfig 默认配置
@@ -58,6 +59,21 @@ func GetClient(config ...*Config) *HTTPClient {
 			if config[0].UserAgent != "" {
 				cfg.UserAgent = config[0].UserAgent
 			}
+			if config[0].Logger != nil {
+				cfg.Logger = config[0].Logger
+			}
+		}
+
+		// 如果没有提供 logger，创建一个默认的（Info 级别，输出到 stdout）
+		logger := cfg.Logger
+		if logger == nil {
+			logger = logrus.New()
+			logger.SetLevel(logrus.InfoLevel)
+			logger.SetOutput(os.Stdout)
+			logger.SetFormatter(&logrus.TextFormatter{
+				DisableColors: true,
+				FullTimestamp: false,
+			})
 		}
 
 		globalClient = &HTTPClient{
@@ -73,6 +89,7 @@ func GetClient(config ...*Config) *HTTPClient {
 			userAgent:  cfg.UserAgent,
 			maxRetries: cfg.MaxRetries,
 			retryDelay: time.Second,
+			logger:     logger,
 		}
 	})
 	return globalClient
