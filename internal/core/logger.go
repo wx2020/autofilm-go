@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -107,28 +108,78 @@ func (hook *ConsoleHook) Levels() []logrus.Level {
 
 // FileHook 文件日志钩子
 type FileHook struct {
-	file     *os.File
-	formatter *CustomFormatter
+	basePath  string        // 日志文件基本路径（不含日期）
+	currentDate string      // 当前日志文件的日期
+	file       *os.File     // 当前日志文件句柄
+	formatter  *CustomFormatter
+	mu         sync.Mutex   // 保护并发访问
 }
 
 // NewFileHook 创建文件日志钩子
-func NewFileHook(filename string) *FileHook {
+func NewFileHook(basePath string) *FileHook {
 	// 确保日志目录存在
-	os.MkdirAll(filepath.Dir(filename), 0755)
+	os.MkdirAll(filepath.Dir(basePath), 0755)
 
-	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return nil
-	}
-
-	return &FileHook{
-		file:     file,
+	hook := &FileHook{
+		basePath:  basePath,
 		formatter: &CustomFormatter{ForceColors: false},
 	}
+
+	// 初始化日志文件
+	hook.rotateFile()
+
+	return hook
+}
+
+// rotateFile 切换日志文件
+func (hook *FileHook) rotateFile() {
+	currentDate := time.Now().Format("2006-01-02")
+
+	// 如果日期未变化，无需切换
+	if hook.currentDate == currentDate && hook.file != nil {
+		return
+	}
+
+	// 关闭旧文件
+	if hook.file != nil {
+		hook.file.Close()
+	}
+
+	// 构建新的日志文件名：AutoFilm-2026-02-23.log
+	dir := filepath.Dir(hook.basePath)
+	baseName := filepath.Base(hook.basePath)
+	ext := filepath.Ext(baseName)
+	nameWithoutExt := baseName[:len(baseName)-len(ext)]
+
+	newFileName := fmt.Sprintf("%s-%s%s", nameWithoutExt, currentDate, ext)
+	newFilePath := filepath.Join(dir, newFileName)
+
+	// 打开新文件
+	file, err := os.OpenFile(newFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		// 如果打开失败，尝试使用原路径
+		file, err = os.OpenFile(hook.basePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return
+		}
+	}
+
+	hook.file = file
+	hook.currentDate = currentDate
 }
 
 // Fire 触发日志
 func (hook *FileHook) Fire(entry *logrus.Entry) error {
+	hook.mu.Lock()
+	defer hook.mu.Unlock()
+
+	// 检查是否需要切换日志文件
+	hook.rotateFile()
+
+	if hook.file == nil {
+		return nil
+	}
+
 	line, err := hook.formatter.Format(entry)
 	if err != nil {
 		return err
@@ -144,6 +195,9 @@ func (hook *FileHook) Levels() []logrus.Level {
 
 // Close 关闭文件钩子
 func (hook *FileHook) Close() error {
+	hook.mu.Lock()
+	defer hook.mu.Unlock()
+
 	if hook.file != nil {
 		return hook.file.Close()
 	}
