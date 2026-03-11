@@ -321,7 +321,7 @@ func (a2s *Alist2Strm) generateContent(path *alist.AlistPath) string {
 		if strings.Contains(path.RawURL, a2s.config.PublicURL) {
 			return path.RawURL
 		}
-		return a2s.config.PublicURL + "/d/" + path.FullPath + "?sign=" + path.Sign
+		return a2s.config.PublicURL + "/d" + path.FullPath + "?sign=" + path.Sign
 
 	case RawURLMode:
 		return path.RawURL
