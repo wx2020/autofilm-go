@@ -19,49 +19,49 @@ import (
 
 // Config Alist2Strm配置
 type Config struct {
-	ID             string
-	URL            string
-	Username       string
-	Password       string
-	Token          string
-	PublicURL      string
-	SourceDir      string
-	TargetDir      string
-	FlattenMode    bool
-	Subtitle       bool
-	Image          bool
-	NFO            bool
-	Mode           string
-	Overwrite      bool
-	OtherExt       string
-	MaxWorkers     int
-	MaxDownloaders int
-	WaitTime       float64
-	SyncServer     bool
-	SyncIgnore     string
+	ID              string
+	URL             string
+	Username        string
+	Password        string
+	Token           string
+	PublicURL       string
+	SourceDir       string
+	TargetDir       string
+	FlattenMode     bool
+	Subtitle        bool
+	Image           bool
+	NFO             bool
+	Mode            string
+	Overwrite       bool
+	OtherExt        string
+	MaxWorkers      int
+	MaxDownloaders  int
+	WaitTime        float64
+	SyncServer      bool
+	SyncIgnore      string
 	SmartProtection *SmartProtectionConfig
-	Cron           string
+	Cron            string
 }
 
 // SmartProtectionConfig 智能保护配置
 type SmartProtectionConfig struct {
-	Enabled    bool  `json:"enabled"`
-	Threshold  int   `json:"threshold"`
-	GraceScans int   `json:"grace_scans"`
+	Enabled    bool `json:"enabled"`
+	Threshold  int  `json:"threshold"`
+	GraceScans int  `json:"grace_scans"`
 }
 
 // Alist2Strm Alist转STRM处理器
 type Alist2Strm struct {
-	config           *Config
-	client           *alist.AlistClient
-	mode             Alist2StrmMode
-	processFileExts  map[string]bool
-	downloadExts     map[string]bool
-	protection       *StrmProtectionManager
-	bdmvManager      *BDMVManager
-	processedPaths   map[string]struct{}
-	processedMu      sync.RWMutex
-	logger           *logrus.Logger
+	config          *Config
+	client          *alist.AlistClient
+	mode            Alist2StrmMode
+	processFileExts map[string]bool
+	downloadExts    map[string]bool
+	protection      *StrmProtectionManager
+	bdmvManager     *BDMVManager
+	processedPaths  map[string]struct{}
+	processedMu     sync.RWMutex
+	logger          *logrus.Logger
 }
 
 // New 创建新的Alist2Strm实例
@@ -318,11 +318,10 @@ func (a2s *Alist2Strm) processFile(ctx context.Context, path *alist.AlistPath) {
 func (a2s *Alist2Strm) generateContent(path *alist.AlistPath) string {
 	switch a2s.mode {
 	case AlistURLMode:
-		content := path.RawURL
-		if a2s.config.PublicURL != "" {
-			content = strings.Replace(content, a2s.config.URL, a2s.config.PublicURL, 1)
+		if strings.Contains(path.RawURL, a2s.config.PublicURL) {
+			return path.RawURL
 		}
-		return content
+		return a2s.config.PublicURL + "/d/" + path.FullPath + "?sign=" + path.Sign
 
 	case RawURLMode:
 		return path.RawURL

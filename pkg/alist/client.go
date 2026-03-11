@@ -44,6 +44,7 @@ type AlistPath struct {
 	Size      int64  `json:"size"`
 	Type      int    `json:"type"` // 1: 文件夹, 0: 文件
 	Modified  string `json:"modified"`
+	Sign      string `json:"sign"`
 	RawURL    string `json:"raw_url,omitempty"`
 	Thumb     string `json:"thumb,omitempty"`
 }
