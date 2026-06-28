@@ -3,6 +3,7 @@ package alist2strm
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -318,10 +319,19 @@ func (a2s *Alist2Strm) processFile(ctx context.Context, path *alist.AlistPath) {
 func (a2s *Alist2Strm) generateContent(path *alist.AlistPath) string {
 	switch a2s.mode {
 	case AlistURLMode:
-		if strings.Contains(path.RawURL, a2s.config.PublicURL) {
+		// 若 Alist 返回的原始直链已指向 public_url 的同源 host（反代直链场景），直接复用，保留其自带的签名
+		// 使用 host 比较而非子串包含，避免 public_url 为空或为短域名时误命中
+		if a2s.config.PublicURL != "" && sameHost(path.RawURL, a2s.config.PublicURL) {
 			return path.RawURL
 		}
-		return a2s.config.PublicURL + "/d" + path.FullPath + "?sign=" + path.Sign
+		// 否则用 public_url 拼接 /d 直链下载路径，并附加签名（若有）
+		// 对路径中的每个分段做 URL 编码，避免中文/空格导致播放器无法解析
+		encoded := encodePath(path.FullPath)
+		u := a2s.config.PublicURL + "/d" + encoded
+		if path.Sign != "" {
+			u += "?sign=" + url.QueryEscape(path.Sign)
+		}
+		return u
 
 	case RawURLMode:
 		return path.RawURL
@@ -332,6 +342,38 @@ func (a2s *Alist2Strm) generateContent(path *alist.AlistPath) string {
 	default:
 		return path.RawURL
 	}
+}
+
+// encodePath 对路径分段做 URL 编码，保留分隔符 /
+func encodePath(p string) string {
+	if p == "" {
+		return p
+	}
+	// 保留前导 /
+	leading := ""
+	if strings.HasPrefix(p, "/") {
+		leading = "/"
+		p = strings.TrimPrefix(p, "/")
+	}
+	parts := strings.Split(p, "/")
+	for i, seg := range parts {
+		parts[i] = url.PathEscape(seg)
+	}
+	return leading + strings.Join(parts, "/")
+}
+
+// sameHost 判断 rawURL 是否指向 publicURL 的同一 host（含端口）
+// 任一解析失败都返回 false，宁可走拼接分支也不误用 RawURL
+func sameHost(rawURL, publicURL string) bool {
+	ru, err := url.Parse(rawURL)
+	if err != nil || ru.Host == "" {
+		return false
+	}
+	pu, err := url.Parse(publicURL)
+	if err != nil || pu.Host == "" {
+		return false
+	}
+	return ru.Host == pu.Host
 }
 
 // downloadFile 下载文件

@@ -355,9 +355,13 @@ func (c *AlistClient) FSList(ctx context.Context, dirPath string) ([]AlistPath, 
 			c.logger.Debugf("[DEBUG] 正在获取文件下载链接: %s", fullPath)
 			if fileDetail, err := c.FSGet(ctx, fullPath); err == nil && fileDetail != nil {
 				result.Content[i].RawURL = fileDetail.RawURL
-				result.Content[i].RawURL = fileDetail.RawURL
+				// 回填签名，list 接口在部分场景下不会下发 sign，以 FSGet 返回为准
+				if fileDetail.Sign != "" {
+					result.Content[i].Sign = fileDetail.Sign
+				}
 				c.logger.Debugf("[DEBUG] 文件: %s", result.Content[i].Name)
 				c.logger.Debugf("[DEBUG]   RawURL: %s", result.Content[i].RawURL)
+				c.logger.Debugf("[DEBUG]   Sign: %s", result.Content[i].Sign)
 			} else {
 				c.logger.Warnf("[WARN] 获取文件下载链接失败: %s, 错误: %v", fullPath, err)
 			}
