@@ -98,6 +98,11 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 			continue
 		}
 
+		if !config.Enable {
+			logger.Infof("Alist2Strm %s 已禁用（enable: false），跳过", config.ID)
+			continue
+		}
+
 		if config.Cron == "" {
 			logger.Warnf("%s 未设置cron表达式", config.ID)
 			continue
@@ -143,6 +148,11 @@ func addAni2AlistJobs(c *cron.Cron) error {
 		config, err := parseAni2AlistConfig(server)
 		if err != nil {
 			logger.Errorf("解析Ani2Alist配置失败: %v", err)
+			continue
+		}
+
+		if !config.Enable {
+			logger.Infof("Ani2Alist %s 已禁用（enable: false），跳过", config.ID)
 			continue
 		}
 
@@ -194,6 +204,11 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 			continue
 		}
 
+		if !config.Enable {
+			logger.Infof("LibraryPoster %s 已禁用（enable: false），跳过", config.ID)
+			continue
+		}
+
 		if config.Cron == "" {
 			logger.Warnf("%s 未设置cron表达式", config.ID)
 			continue
@@ -225,6 +240,7 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 func parseAlist2StrmConfig(m map[string]interface{}) (*alist2strm.Config, error) {
 	config := &alist2strm.Config{
 		ID:             getString(m, "id"),
+		Enable:         getEnable(m, "enable"),
 		URL:            getString(m, "url"),
 		Username:       getString(m, "username"),
 		Password:       getString(m, "password"),
@@ -274,6 +290,7 @@ func parseAlist2StrmConfig(m map[string]interface{}) (*alist2strm.Config, error)
 func parseAni2AlistConfig(m map[string]interface{}) (*ani2alist.Config, error) {
 	config := &ani2alist.Config{
 		ID:        getString(m, "id"),
+		Enable:    getEnable(m, "enable"),
 		URL:       getString(m, "url"),
 		Username:  getString(m, "username"),
 		Password:  getString(m, "password"),
@@ -301,6 +318,7 @@ func parseAni2AlistConfig(m map[string]interface{}) (*ani2alist.Config, error) {
 func parseLibraryPosterConfig(m map[string]interface{}) (*libraryposter.Config, error) {
 	config := &libraryposter.Config{
 		ID:               getString(m, "id"),
+		Enable:           getEnable(m, "enable"),
 		URL:              getString(m, "url"),
 		APIKey:           getString(m, "api_key"),
 		TitleFontPath:    getString(m, "title_font_path"),
@@ -343,6 +361,16 @@ func getBool(m map[string]interface{}, key string) bool {
 		}
 	}
 	return false
+}
+
+// getEnable 读取启动开关字段，缺省视为启用
+func getEnable(m map[string]interface{}, key string) bool {
+	if v, ok := m[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return true
 }
 
 func getInt(m map[string]interface{}, key string) int {

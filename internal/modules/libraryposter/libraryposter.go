@@ -20,6 +20,7 @@ import (
 // Config LibraryPoster配置
 type Config struct {
 	ID                string
+	Enable            bool // 是否启用此条目，缺省视为启用
 	URL               string
 	APIKey            string
 	TitleFontPath     string

@@ -23,6 +23,7 @@ var aniSeasonMonths = []int{1, 4, 7, 10}
 // Config Ani2Alist配置
 type Config struct {
 	ID        string
+	Enable    bool // 是否启用此条目，缺省视为启用
 	URL       string
 	Username  string
 	Password  string

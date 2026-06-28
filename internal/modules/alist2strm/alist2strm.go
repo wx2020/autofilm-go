@@ -21,6 +21,7 @@ import (
 // Config Alist2Strm配置
 type Config struct {
 	ID              string
+	Enable          bool // 是否启用此条目，缺省视为启用
 	URL             string
 	Username        string
 	Password        string
