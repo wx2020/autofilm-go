@@ -18,8 +18,8 @@ import (
 var logger = core.GetLogger()
 
 func main() {
-	// 打印Logo
-	extensions.PrintLogo(core.AppVersion())
+	// 打印启动横幅
+	extensions.PrintBanner(core.AppVersion())
 
 	// 初始化配置
 	settings := core.GetSettings()
@@ -75,6 +75,9 @@ func main() {
 	<-stopCtx.Done()
 
 	logger.Info("AutoFilm程序退出！")
+
+	// 打印退出横幅
+	extensions.PrintBanner(core.AppVersion())
 }
 
 // addAlist2StrmJobs 添加Alist2Strm定时任务

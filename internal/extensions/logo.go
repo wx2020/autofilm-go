@@ -2,30 +2,27 @@ package extensions
 
 import "github.com/akimio/autofilm/internal/core"
 
-// Logo 应用启动时显示的 Logo
-const Logo = `
-      _           _            ____ ___
-     | |         | |          |  _ \\_ _|
-  ___| |__   __ _| | ___ _   _| |_) | |
- / __| '_ \\ / _  | |/ __| | | |  _ <| |
-| (__| | | | (_| | | (__| |_| | |_) | |
- \___|_| |_|\\__,_|_|\\___|\\__, |____/___|
-                          __/ |
-                         |___/
-`
-
-// PrintLogo 打印 Logo
-func PrintLogo(version string) {
-	println(Logo)
+// PrintBanner 打印 App 名称与版本横幅，用于程序启动与退出时显示
+func PrintBanner(version string) {
 	center := "═════════════════════════════════════════════════════════════════"
 	centerText := " " + core.AppName + " " + version + " "
 
+	// 按 rune 切片对齐，避免把多字节 UTF-8 字符从中间切断产生乱码
+	centerRunes := []rune(center)
+	textRunes := []rune(centerText)
+
 	// 简单居中对齐
-	padding := (len(center) - len(centerText)) / 2
+	padding := (len(centerRunes) - len(textRunes)) / 2
 	if padding < 0 {
 		padding = 0
 	}
 
-	println(center[:padding] + centerText + center[padding+len(centerText):])
-	println()
+	// 文本宽度溢出时，只用文本
+	if padding+len(textRunes) > len(centerRunes) {
+		println(centerText)
+		return
+	}
+
+	result := string(centerRunes[:padding]) + centerText + string(centerRunes[padding+len(textRunes):])
+	println(result)
 }

@@ -67,9 +67,9 @@ type CustomFormatter struct {
 
 // Format 格式化日志
 func (f *CustomFormatter) Format(entry *logrus.Entry) ([]byte, error) {
-	// 格式：【级别】时间 | 消息
+	// 格式：[级别] 时间 | 消息
 	timestamp := entry.Time.Format("2006-01-02 15:04:05")
-	message := fmt.Sprintf("【%s】%s | %s\n",
+	message := fmt.Sprintf("[%s] %s | %s\n",
 		entry.Level.String(),
 		timestamp,
 		entry.Message)
