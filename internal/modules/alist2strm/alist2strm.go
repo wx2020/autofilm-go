@@ -62,6 +62,7 @@ type Alist2Strm struct {
 	bdmvManager     *BDMVManager
 	processedPaths  map[string]struct{}
 	processedMu     sync.RWMutex
+	downloadSem     chan struct{} // 限制并发下载文件数（与 strm 生成独立）
 	logger          *logrus.Logger
 }
 
@@ -99,6 +100,7 @@ func New(cfg *Config) (*Alist2Strm, error) {
 		downloadExts:    downloadExts,
 		bdmvManager:     NewBDMVManager(),
 		processedPaths:  make(map[string]struct{}),
+		downloadSem:     make(chan struct{}, maxDownloaders(cfg.MaxDownloaders)),
 		logger:          core.GetLogger(),
 	}
 
@@ -376,8 +378,23 @@ func sameHost(rawURL, publicURL string) bool {
 	return ru.Host == pu.Host
 }
 
+// maxDownloaders 返回合法的最大下载并发数，<=0 则取默认值 5
+func maxDownloaders(n int) int {
+	if n <= 0 {
+		return 5
+	}
+	return n
+}
+
 // downloadFile 下载文件
+// 通过 downloadSem 限制并发下载数，与 max_downloaders 配置项对应，避免下载挤占磁盘 IO / 上游带宽
 func (a2s *Alist2Strm) downloadFile(ctx context.Context, url, filePath string) error {
+	select {
+	case a2s.downloadSem <- struct{}{}:
+		defer func() { <-a2s.downloadSem }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	client := httpclient.GetClient()
 	return client.Download(ctx, url, filePath, nil)
 }
