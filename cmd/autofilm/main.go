@@ -371,8 +371,21 @@ func parseLibraryPosterConfig(m map[string]interface{}) (*libraryposter.Config, 
 // 辅助函数：从map中获取值
 func getString(m map[string]interface{}, key string) string {
 	if v, ok := m[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
+		switch val := v.(type) {
+		case string:
+			return val
+		case int:
+			return fmt.Sprintf("%d", val)
+		case int64:
+			return fmt.Sprintf("%d", val)
+		case float64:
+			// 整数值的 float64 也转成字符串，避免 yaml 把 115 解析为 float 又丢失
+			return fmt.Sprintf("%g", val)
+		case bool:
+			if val {
+				return "true"
+			}
+			return "false"
 		}
 	}
 	return ""
