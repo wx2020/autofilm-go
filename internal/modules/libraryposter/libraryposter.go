@@ -21,6 +21,7 @@ import (
 type Config struct {
 	ID                string
 	Enable            bool // 是否启用此条目，缺省视为启用
+	RunOnStart        bool // 启动时立即执行一次，不等 cron，缺省视为不执行
 	URL               string
 	APIKey            string
 	TitleFontPath     string

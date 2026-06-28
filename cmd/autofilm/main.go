@@ -108,7 +108,7 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 			continue
 		}
 
-		_, err = c.AddFunc(config.Cron, func() {
+		runA2S := func() {
 			ctx := context.Background()
 			a2s, err := alist2strm.New(config)
 			if err != nil {
@@ -118,12 +118,19 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 			if err := a2s.Run(ctx); err != nil {
 				logger.Errorf("Alist2Strm运行失败: %v", err)
 			}
-		})
+		}
+
+		_, err = c.AddFunc(config.Cron, runA2S)
 
 		if err != nil {
 			logger.Errorf("添加定时任务失败 %s: %v", config.ID, err)
 		} else {
 			logger.Infof("%s 已被添加至后台任务 (cron: %s)", config.ID, config.Cron)
+		}
+
+		if config.RunOnStart {
+			logger.Infof("%s 已配置 run_on_start，启动时立即执行一次", config.ID)
+			go runA2S()
 		}
 	}
 
@@ -161,7 +168,7 @@ func addAni2AlistJobs(c *cron.Cron) error {
 			continue
 		}
 
-		_, err = c.AddFunc(config.Cron, func() {
+		runA2A := func() {
 			ctx := context.Background()
 			a2a, err := ani2alist.New(config)
 			if err != nil {
@@ -171,12 +178,19 @@ func addAni2AlistJobs(c *cron.Cron) error {
 			if err := a2a.Run(ctx); err != nil {
 				logger.Errorf("Ani2Alist运行失败: %v", err)
 			}
-		})
+		}
+
+		_, err = c.AddFunc(config.Cron, runA2A)
 
 		if err != nil {
 			logger.Errorf("添加定时任务失败 %s: %v", config.ID, err)
 		} else {
 			logger.Infof("%s 已被添加至后台任务 (cron: %s)", config.ID, config.Cron)
+		}
+
+		if config.RunOnStart {
+			logger.Infof("%s 已配置 run_on_start，启动时立即执行一次", config.ID)
+			go runA2A()
 		}
 	}
 
@@ -214,7 +228,7 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 			continue
 		}
 
-		_, err = c.AddFunc(config.Cron, func() {
+		runLP := func() {
 			ctx := context.Background()
 			lp, err := libraryposter.New(config)
 			if err != nil {
@@ -224,12 +238,19 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 			if err := lp.Run(ctx); err != nil {
 				logger.Errorf("LibraryPoster运行失败: %v", err)
 			}
-		})
+		}
+
+		_, err = c.AddFunc(config.Cron, runLP)
 
 		if err != nil {
 			logger.Errorf("添加定时任务失败 %s: %v", config.ID, err)
 		} else {
 			logger.Infof("%s 已被添加至后台任务 (cron: %s)", config.ID, config.Cron)
+		}
+
+		if config.RunOnStart {
+			logger.Infof("%s 已配置 run_on_start，启动时立即执行一次", config.ID)
+			go runLP()
 		}
 	}
 
@@ -241,6 +262,7 @@ func parseAlist2StrmConfig(m map[string]interface{}) (*alist2strm.Config, error)
 	config := &alist2strm.Config{
 		ID:             getString(m, "id"),
 		Enable:         getEnable(m, "enable"),
+		RunOnStart:     getBool(m, "run_on_start"),
 		URL:            getString(m, "url"),
 		Username:       getString(m, "username"),
 		Password:       getString(m, "password"),
@@ -289,18 +311,19 @@ func parseAlist2StrmConfig(m map[string]interface{}) (*alist2strm.Config, error)
 // parseAni2AlistConfig 解析Ani2Alist配置
 func parseAni2AlistConfig(m map[string]interface{}) (*ani2alist.Config, error) {
 	config := &ani2alist.Config{
-		ID:        getString(m, "id"),
-		Enable:    getEnable(m, "enable"),
-		URL:       getString(m, "url"),
-		Username:  getString(m, "username"),
-		Password:  getString(m, "password"),
-		Token:     getString(m, "token"),
-		TargetDir: getString(m, "target_dir"),
-		RSSUpdate: getBool(m, "rss_update"),
-		SrcDomain: getString(m, "src_domain"),
-		RSSDomain: getString(m, "rss_domain"),
-		KeyWord:   getString(m, "key_word"),
-		Cron:      getString(m, "cron"),
+		ID:         getString(m, "id"),
+		Enable:     getEnable(m, "enable"),
+		RunOnStart: getBool(m, "run_on_start"),
+		URL:        getString(m, "url"),
+		Username:   getString(m, "username"),
+		Password:   getString(m, "password"),
+		Token:      getString(m, "token"),
+		TargetDir:  getString(m, "target_dir"),
+		RSSUpdate:  getBool(m, "rss_update"),
+		SrcDomain:  getString(m, "src_domain"),
+		RSSDomain:  getString(m, "rss_domain"),
+		KeyWord:    getString(m, "key_word"),
+		Cron:       getString(m, "cron"),
 	}
 
 	// 处理可选的年月参数
@@ -319,6 +342,7 @@ func parseLibraryPosterConfig(m map[string]interface{}) (*libraryposter.Config, 
 	config := &libraryposter.Config{
 		ID:               getString(m, "id"),
 		Enable:           getEnable(m, "enable"),
+		RunOnStart:       getBool(m, "run_on_start"),
 		URL:              getString(m, "url"),
 		APIKey:           getString(m, "api_key"),
 		TitleFontPath:    getString(m, "title_font_path"),

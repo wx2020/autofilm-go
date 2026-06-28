@@ -110,6 +110,7 @@ func (sm *SettingManager) createDefaultConfig() {
 Alist2StrmList: []
   # - id: "example"
   #   enable: true                      # 是否启用此条目（可选，默认 true，调试时设为 false 即可临时禁用而不删除条目）
+  #   run_on_start: false               # 启动时立即执行一次，不等 cron（可选，默认 false）
   #   url: "http://localhost:5244"
   #   username: ""
   #   password: ""
@@ -138,6 +139,7 @@ Alist2StrmList: []
 Ani2AlistList: []
   # - id: "example"
   #   enable: true                      # 是否启用此条目（可选，默认 true）
+  #   run_on_start: false               # 启动时立即执行一次，不等 cron（可选，默认 false）
   #   url: "http://localhost:5244"
   #   username: ""
   #   password: ""
@@ -154,6 +156,7 @@ Ani2AlistList: []
 LibraryPosterList: []
   # - id: "example"
   #   enable: true                      # 是否启用此条目（可选，默认 true）
+  #   run_on_start: false               # 启动时立即执行一次，不等 cron（可选，默认 false）
   #   url: "http://localhost:8096"
   #   api_key: ""
   #   title_font_path: "/fonts/title.ttf"
