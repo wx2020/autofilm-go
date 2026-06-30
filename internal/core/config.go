@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 )
 
@@ -231,4 +232,15 @@ func (sm *SettingManager) GetLibraryPosterList() []map[string]interface{} {
 // ReloadConfig 重新加载配置文件
 func (sm *SettingManager) ReloadConfig() error {
 	return sm.viper.ReadInConfig()
+}
+
+// OnConfigChange 注册配置文件变更回调。
+// 内部启用 viper.WatchConfig()（基于 fsnotify 或回退轮询），
+// 每次配置文件写入事件触发时调用 callback。
+// 仅支持注册一个回调；多次调用会以最后一次为准（与 viper.OnConfigChange 行为一致）。
+func (sm *SettingManager) OnConfigChange(callback func()) {
+	sm.viper.WatchConfig()
+	sm.viper.OnConfigChange(func(_ fsnotify.Event) {
+		callback()
+	})
 }

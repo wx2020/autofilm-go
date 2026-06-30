@@ -28,6 +28,10 @@ func main() {
 	core.InitLogger()
 	logger = core.GetLogger()
 
+	// 初始化 ConfigStore（P0：包装现有 SettingManager，启动文件监听 + 订阅广播）
+	// 后续 P3 阶段可在此处 SetStore(SQLStore) 切换后端
+	_ = core.Store()
+
 	logger.Infof("AutoFilm %s 启动中...", core.AppVersion())
 	logger.Debugf("是否开启DEBUG模式: %v", settings.IsDebug())
 
