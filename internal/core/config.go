@@ -83,8 +83,10 @@ func (sm *SettingManager) loadConfig() {
 
 	// 读取配置文件
 	if err := sm.viper.ReadInConfig(); err != nil {
-		// 如果配置文件不存在，创建默认配置
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+		// viper 在使用 SetConfigFile 模式下，文件不存在时返回 *os.PathError，
+		// 而非 viper.ConfigFileNotFoundError（后者仅在未设置具体路径时返回）。
+		// 直接以 os.Stat 兜底检查：文件不存在则创建默认配置。
+		if _, statErr := os.Stat(configFile); os.IsNotExist(statErr) {
 			sm.createDefaultConfig()
 		} else {
 			fmt.Printf("Error reading config file: %v\n", err)
