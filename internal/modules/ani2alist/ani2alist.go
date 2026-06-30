@@ -3,6 +3,7 @@ package ani2alist
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -102,7 +103,7 @@ func (a2a *Ani2Alist) Run(ctx context.Context) error {
 	// 验证参数
 	if valid, errMsg := a2a.isValid(); !valid {
 		a2a.logger.Error(errMsg)
-		return fmt.Errorf(errMsg)
+		return errors.New(errMsg)
 	}
 
 	// 获取或创建存储器
