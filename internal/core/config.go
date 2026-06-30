@@ -37,6 +37,7 @@ type SettingManager struct {
 	debug     bool
 	timezone  string
 	viper     *viper.Viper
+	viperMu   sync.Mutex  // viper 非线程安全，需加锁串行访问
 }
 
 // GetSettings 获取配置管理器单例
@@ -232,7 +233,10 @@ func (sm *SettingManager) GetLibraryPosterList() []map[string]interface{} {
 }
 
 // ReloadConfig 重新加载配置文件
+// viper 非线程安全，调用前需持锁以确保并发安全。
 func (sm *SettingManager) ReloadConfig() error {
+	sm.viperMu.Lock()
+	defer sm.viperMu.Unlock()
 	return sm.viper.ReadInConfig()
 }
 

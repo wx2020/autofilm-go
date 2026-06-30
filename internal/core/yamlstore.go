@@ -78,6 +78,9 @@ func (y *YamlStore) Subscribe() (<-chan struct{}, func()) {
 }
 
 // notify 非阻塞地向所有订阅者广播一次变更。
+//
+// 已退订的 channel 可能正被对应 goroutine 关闭；
+// 此处用 recover 兜底，防止向已关闭 channel 发送时 panic 扩散。
 func (y *YamlStore) notify() {
 	y.subsMu.Lock()
 	subs := make([]chan struct{}, len(y.subscribers))
@@ -85,10 +88,13 @@ func (y *YamlStore) notify() {
 	y.subsMu.Unlock()
 
 	for _, ch := range subs {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
+		func() {
+			defer func() { _ = recover() }()
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}()
 	}
 }
 
