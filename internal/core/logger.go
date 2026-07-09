@@ -53,6 +53,15 @@ func InitLogger() {
 	logger.AddHook(fileHook)
 }
 
+// AddLogHook 向全局日志记录器添加钩子
+func AddLogHook(hook logrus.Hook) {
+	loggerMu.Lock()
+	defer loggerMu.Unlock()
+	if logger != nil {
+		logger.AddHook(hook)
+	}
+}
+
 // GetLogger 获取日志记录器
 func GetLogger() *logrus.Logger {
 	loggerMu.RLock()

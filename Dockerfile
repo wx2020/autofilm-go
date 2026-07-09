@@ -1,8 +1,18 @@
 # 构建参数
 ARG VERSION=dev
 ARG GO_VERSION=1.24
+ARG NODE_VERSION=22
 
-# 多阶段构建
+# ========= 前端构建阶段 =========
+FROM node:${NODE_VERSION}-alpine AS web-builder
+
+WORKDIR /build/webui
+COPY webui/package.json webui/package-lock.json* ./
+RUN npm ci
+COPY webui/ .
+RUN npm run build
+
+# ========= Go 构建阶段 =========
 FROM golang:${GO_VERSION}-alpine AS builder
 
 # 安装构建依赖
@@ -16,6 +26,9 @@ RUN go mod download
 
 # 复制源代码
 COPY . .
+
+# 从前端构建阶段复制 dist
+COPY --from=web-builder /build/webui/ ../internal/web/dist
 
 # 构建参数传递
 ARG VERSION

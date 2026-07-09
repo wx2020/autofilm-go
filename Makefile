@@ -1,4 +1,4 @@
-.PHONY: all build run test clean docker-build docker-push
+.PHONY: all build run test clean docker-build docker-push web web-build
 
 # 变量定义
 BINARY_NAME=autofilm
@@ -16,7 +16,15 @@ GOMOD=$(GOCMD) mod
 DOCKER_IMAGE=autofilm-go
 DOCKER_TAG=$(VERSION)
 
-all: build
+all: web-build build
+
+## web: 安装前端依赖
+web:
+	cd webui && npm install
+
+## web-build: 构建前端（依赖 Node.js）
+web-build: web
+	cd webui && npm run build
 
 ## build: 编译二进制文件
 build:

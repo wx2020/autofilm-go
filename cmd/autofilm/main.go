@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/akimio/autofilm/internal/core"
 	"github.com/akimio/autofilm/internal/extensions"
@@ -13,6 +14,7 @@ import (
 	"github.com/akimio/autofilm/internal/modules/alist2strm"
 	"github.com/akimio/autofilm/internal/modules/ani2alist"
 	"github.com/akimio/autofilm/internal/modules/libraryposter"
+	"github.com/akimio/autofilm/internal/web"
 	"github.com/robfig/cron/v3"
 )
 
@@ -40,8 +42,19 @@ func main() {
 	logger.Debugf("是否开启DEBUG模式: %v", settings.IsDebug())
 
 	// 创建上下文
-	_, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// 启动 Web 服务
+	webCfg := &web.WebConfig{
+		Enabled: true,
+		Host:    "0.0.0.0",
+		Port:    8080,
+	}
+	webServer := web.NewServer(webCfg)
+	if err := webServer.Start(); err != nil {
+		logger.Errorf("Web服务启动失败: %v", err)
+	}
 
 	// 创建cron调度器
 	cronScheduler := cron.New(cron.WithSeconds())
@@ -78,6 +91,40 @@ func main() {
 	cronScheduler.Start()
 	logger.Info("AutoFilm启动完成")
 
+	// 监听配置重载信号（热重载）
+	go func() {
+		reloadCh := core.ReloadCh()
+		for {
+			select {
+			case <-reloadCh:
+				logger.Info("检测到配置变更，正在重建定时任务...")
+				// 停止当前调度器
+				stopCtx := cronScheduler.Stop()
+				<-stopCtx.Done()
+
+				// 清空模块注册表
+				reg := web.GetModuleRegistry()
+				reg.Clear()
+
+				// 重新加载配置
+				settings.ReloadConfig()
+
+				// 重建 cron 调度器
+				cronScheduler = cron.New(cron.WithSeconds())
+
+				addAlist2StrmJobs(cronScheduler)
+				addAni2AlistJobs(cronScheduler)
+				addLibraryPosterJobs(cronScheduler)
+				addAlistSyncJobs(cronScheduler)
+
+				cronScheduler.Start()
+				logger.Info("定时任务重建完成")
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// 等待退出信号
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -93,6 +140,11 @@ func main() {
 	for _, d := range alissyncDaemons {
 		d.Stop()
 	}
+
+	// 关闭 Web 服务
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	webServer.Shutdown(shutdownCtx)
 
 	logger.Info("AutoFilm程序退出！")
 
@@ -121,17 +173,18 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 			continue
 		}
 
-		if !config.Enable {
-			logger.Infof("Alist2Strm %s 已禁用（enable: false），跳过", config.ID)
-			continue
-		}
-
 		if config.Cron == "" {
 			logger.Warnf("%s 未设置cron表达式", config.ID)
 			continue
 		}
 
-		runA2S := func() {
+		entry := &web.ModuleEntry{
+			Type:    web.ModuleAlist2Strm,
+			ID:      config.ID,
+			Enabled: config.Enable,
+			Cron:    config.Cron,
+		}
+		entry.RunFunc = func() {
 			ctx := context.Background()
 			a2s, err := alist2strm.New(config)
 			if err != nil {
@@ -142,6 +195,9 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 				logger.Errorf("Alist2Strm运行失败: %v", err)
 			}
 		}
+		web.GetModuleRegistry().Register(entry)
+
+		runA2S := entry.RunFunc
 
 		_, err = c.AddFunc(config.Cron, runA2S)
 
@@ -151,7 +207,7 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 			logger.Infof("%s 已被添加至后台任务 (cron: %s)", config.ID, config.Cron)
 		}
 
-		if config.RunOnStart {
+		if config.RunOnStart && config.Enable {
 			logger.Infof("%s 已配置 run_on_start，启动时立即执行一次", config.ID)
 			go runA2S()
 		}
@@ -181,17 +237,18 @@ func addAni2AlistJobs(c *cron.Cron) error {
 			continue
 		}
 
-		if !config.Enable {
-			logger.Infof("Ani2Alist %s 已禁用（enable: false），跳过", config.ID)
-			continue
-		}
-
 		if config.Cron == "" {
 			logger.Warnf("%s 未设置cron表达式", config.ID)
 			continue
 		}
 
-		runA2A := func() {
+		entry := &web.ModuleEntry{
+			Type:    web.ModuleAni2Alist,
+			ID:      config.ID,
+			Enabled: config.Enable,
+			Cron:    config.Cron,
+		}
+		entry.RunFunc = func() {
 			ctx := context.Background()
 			a2a, err := ani2alist.New(config)
 			if err != nil {
@@ -202,6 +259,9 @@ func addAni2AlistJobs(c *cron.Cron) error {
 				logger.Errorf("Ani2Alist运行失败: %v", err)
 			}
 		}
+		web.GetModuleRegistry().Register(entry)
+
+		runA2A := entry.RunFunc
 
 		_, err = c.AddFunc(config.Cron, runA2A)
 
@@ -211,7 +271,7 @@ func addAni2AlistJobs(c *cron.Cron) error {
 			logger.Infof("%s 已被添加至后台任务 (cron: %s)", config.ID, config.Cron)
 		}
 
-		if config.RunOnStart {
+		if config.RunOnStart && config.Enable {
 			logger.Infof("%s 已配置 run_on_start，启动时立即执行一次", config.ID)
 			go runA2A()
 		}
@@ -241,17 +301,18 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 			continue
 		}
 
-		if !config.Enable {
-			logger.Infof("LibraryPoster %s 已禁用（enable: false），跳过", config.ID)
-			continue
-		}
-
 		if config.Cron == "" {
 			logger.Warnf("%s 未设置cron表达式", config.ID)
 			continue
 		}
 
-		runLP := func() {
+		entry := &web.ModuleEntry{
+			Type:    web.ModuleLibraryPoster,
+			ID:      config.ID,
+			Enabled: config.Enable,
+			Cron:    config.Cron,
+		}
+		entry.RunFunc = func() {
 			ctx := context.Background()
 			lp, err := libraryposter.New(config)
 			if err != nil {
@@ -262,6 +323,9 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 				logger.Errorf("LibraryPoster运行失败: %v", err)
 			}
 		}
+		web.GetModuleRegistry().Register(entry)
+
+		runLP := entry.RunFunc
 
 		_, err = c.AddFunc(config.Cron, runLP)
 
@@ -271,7 +335,7 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 			logger.Infof("%s 已被添加至后台任务 (cron: %s)", config.ID, config.Cron)
 		}
 
-		if config.RunOnStart {
+		if config.RunOnStart && config.Enable {
 			logger.Infof("%s 已配置 run_on_start，启动时立即执行一次", config.ID)
 			go runLP()
 		}
@@ -301,17 +365,18 @@ func addAlistSyncJobs(c *cron.Cron) error {
 			continue
 		}
 
-		if !config.Enable {
-			logger.Infof("AlistSync %s 已禁用（enable: false），跳过", config.ID)
-			continue
-		}
-
 		if config.Cron == "" {
 			logger.Warnf("AlistSync %s 未设置cron表达式", config.ID)
 			continue
 		}
 
-		runSync := func() {
+		entry := &web.ModuleEntry{
+			Type:    web.ModuleAlissync,
+			ID:      config.ID,
+			Enabled: config.Enable,
+			Cron:    config.Cron,
+		}
+		entry.RunFunc = func() {
 			ctx := context.Background()
 			syncer, err := alissync.New(config)
 			if err != nil {
@@ -323,6 +388,9 @@ func addAlistSyncJobs(c *cron.Cron) error {
 				logger.Errorf("AlistSync运行失败: %v", err)
 			}
 		}
+		web.GetModuleRegistry().Register(entry)
+
+		runSync := entry.RunFunc
 
 		_, err = c.AddFunc(config.Cron, runSync)
 
@@ -332,7 +400,7 @@ func addAlistSyncJobs(c *cron.Cron) error {
 			logger.Infof("AlistSync %s 已被添加至后台任务 (cron: %s)", config.ID, config.Cron)
 		}
 
-		if config.RunOnStart {
+		if config.RunOnStart && config.Enable {
 			logger.Infof("AlistSync %s 已配置 run_on_start，启动时立即执行一次", config.ID)
 			go runSync()
 		}
