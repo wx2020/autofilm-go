@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/akimio/autofilm/internal/storage"
 	"github.com/akimio/autofilm/pkg/alist"
 )
 
@@ -66,8 +67,74 @@ func snapshotFilePath(cacheDir, id string) string {
 	return filepath.Join(cacheDir, "alist2strm_"+id+".json")
 }
 
-// LoadSnapshot 从磁盘加载快照，文件不存在或损坏时返回 nil
+// LoadSnapshot 加载快照
+// 优先从数据库读取，回退到 JSON 文件
 func LoadSnapshot(id, cacheDir string) (*Snapshot, error) {
+	if store := storage.GlobalStore(); store != nil {
+		return dbLoadSnapshot(store, id)
+	}
+	return fileLoadSnapshot(id, cacheDir)
+}
+
+// SaveSnapshot 保存快照
+// 优先写入数据库，回退到 JSON 文件
+func SaveSnapshot(id, cacheDir string, snap *Snapshot) error {
+	if store := storage.GlobalStore(); store != nil {
+		return dbSaveSnapshot(store, id, snap)
+	}
+	return fileSaveSnapshot(id, cacheDir, snap)
+}
+
+func dbLoadSnapshot(store *storage.Store, cfgID string) (*Snapshot, error) {
+	// 查找 config_id
+	var configID int64
+	err := store.QueryRow("SELECT id FROM alist2strm_configs WHERE cfg_id = ?", cfgID).Scan(&configID)
+	if err != nil {
+		return nil, nil
+	}
+
+	entries, err := store.LoadSnapshot(configID)
+	if err != nil {
+		return nil, err
+	}
+
+	snap := &Snapshot{
+		Updated: time.Now(),
+		Files:   make(map[string]FileEntry, len(entries)),
+	}
+	for _, e := range entries {
+		snap.Files[e.Path] = FileEntry{
+			Size:     e.Size,
+			Modified: e.Modified,
+			Sign:     e.Sign,
+		}
+	}
+	return snap, nil
+}
+
+func dbSaveSnapshot(store *storage.Store, cfgID string, snap *Snapshot) error {
+	// 查找 config_id
+	var configID int64
+	err := store.QueryRow("SELECT id FROM alist2strm_configs WHERE cfg_id = ?", cfgID).Scan(&configID)
+	if err != nil {
+		return err
+	}
+
+	var entries []storage.SnapshotEntry
+	for path, fe := range snap.Files {
+		entries = append(entries, storage.SnapshotEntry{
+			ConfigID: configID,
+			Path:     path,
+			Size:     fe.Size,
+			Modified: fe.Modified,
+			Sign:     fe.Sign,
+		})
+	}
+
+	return store.SaveSnapshot(configID, entries)
+}
+
+func fileLoadSnapshot(id, cacheDir string) (*Snapshot, error) {
 	path := snapshotFilePath(cacheDir, id)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -87,8 +154,7 @@ func LoadSnapshot(id, cacheDir string) (*Snapshot, error) {
 	return &snap, nil
 }
 
-// SaveSnapshot 将快照原子写入磁盘
-func SaveSnapshot(id, cacheDir string, snap *Snapshot) error {
+func fileSaveSnapshot(id, cacheDir string, snap *Snapshot) error {
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return err
 	}

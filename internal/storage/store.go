@@ -17,6 +17,28 @@ func NewStore(db *sql.DB, key []byte) *Store {
 	return &Store{db: db, key: key}
 }
 
+// DB 返回底层数据库连接
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
+// QueryRow 便捷方法，直接代理 sql.DB.QueryRow
+func (s *Store) QueryRow(query string, args ...interface{}) *sql.Row {
+	return s.db.QueryRow(query, args...)
+}
+
+var globalStore *Store
+
+// SetGlobalStore 设置全局 Store 实例（供模块使用）
+func SetGlobalStore(s *Store) {
+	globalStore = s
+}
+
+// GlobalStore 获取全局 Store 实例（可能为 nil，表示 DB 不可用）
+func GlobalStore() *Store {
+	return globalStore
+}
+
 // ==================== 连接凭据 ====================
 
 // Connection 连接凭据
@@ -207,6 +229,40 @@ func scanSyncTasks(rows *sql.Rows) ([]*SyncTaskRow, error) {
 		tasks = append(tasks, t)
 	}
 	return tasks, rows.Err()
+}
+
+// GetSyncTaskByDstPath 按目标路径查询同步任务
+func (s *Store) GetSyncTaskByDstPath(dstPath string) (*SyncTaskRow, error) {
+	row := s.db.QueryRow(`SELECT id, sync_config_id, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
+		FROM sync_tasks WHERE dst_path = ?`, dstPath)
+	t := &SyncTaskRow{}
+	if err := row.Scan(&t.ID, &t.SyncConfigID, &t.SrcPath, &t.DstPath, &t.State, &t.AlistTaskID,
+		&t.Attempts, &t.LastError, &t.NextRetryAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// UpsertSyncTask 更新或插入同步任务（按 dst_path 匹配）
+func (s *Store) UpsertSyncTask(t *SyncTaskRow) error {
+	existing, err := s.GetSyncTaskByDstPath(t.DstPath)
+	if err == nil {
+		t.ID = existing.ID
+		return s.UpdateSyncTask(t)
+	}
+
+	if err != sql.ErrNoRows {
+		return err
+	}
+
+	_, err = s.CreateSyncTask(t)
+	return err
+}
+
+// DeleteSyncTaskByDstPath 按目标路径删除同步任务
+func (s *Store) DeleteSyncTaskByDstPath(dstPath string) error {
+	_, err := s.db.Exec("DELETE FROM sync_tasks WHERE dst_path = ?", dstPath)
+	return err
 }
 
 // ==================== 任务运行记录 ====================

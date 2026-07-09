@@ -66,6 +66,7 @@ func main() {
 		}
 
 		dbStore = storage.NewStore(database, key)
+		storage.SetGlobalStore(dbStore)
 		logger.Info("数据库初始化完成")
 	}
 

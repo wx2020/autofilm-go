@@ -5,8 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/akimio/autofilm/internal/storage"
 )
 
 // SyncTask 同步任务
@@ -41,9 +44,113 @@ func (qm *QueueManager) taskFilePath(taskID string) string {
 	return filepath.Join(qm.queueDir, taskID+".json")
 }
 
-// Save 保存同步任务到磁盘
+// Save 保存同步任务
+// 优先写入数据库，回退到 JSON 文件
 func (qm *QueueManager) Save(task *SyncTask) error {
 	task.UpdatedAt = time.Now()
+	if store := storage.GlobalStore(); store != nil {
+		return qm.dbSave(store, task)
+	}
+	return qm.fileSave(task)
+}
+
+// Load 加载单个任务
+func (qm *QueueManager) Load(taskID string) (*SyncTask, error) {
+	if store := storage.GlobalStore(); store != nil {
+		return qm.dbLoad(store, taskID)
+	}
+	return qm.fileLoad(taskID)
+}
+
+// Delete 删除任务
+func (qm *QueueManager) Delete(taskID string) error {
+	if store := storage.GlobalStore(); store != nil {
+		return store.DeleteSyncTaskByDstPath(taskID)
+	}
+	return qm.fileDelete(taskID)
+}
+
+// LoadAll 加载所有任务
+func (qm *QueueManager) LoadAll() ([]*SyncTask, error) {
+	if store := storage.GlobalStore(); store != nil {
+		return qm.dbLoadAll(store)
+	}
+	return qm.fileLoadAll()
+}
+
+// LoadByState 加载指定状态的任务
+func (qm *QueueManager) LoadByState(state string) ([]*SyncTask, error) {
+	if store := storage.GlobalStore(); store != nil {
+		rows, err := store.ListSyncTasksByState(state)
+		if err != nil {
+			return nil, err
+		}
+		return syncTaskRowsToTasks(rows), nil
+	}
+	return qm.fileLoadByState(state)
+}
+
+// ==================== DB 实现 ====================
+
+func (qm *QueueManager) dbSave(store *storage.Store, task *SyncTask) error {
+	return store.UpsertSyncTask(&storage.SyncTaskRow{
+		SyncConfigID: 0,
+		SrcPath:      task.SrcPath,
+		DstPath:      task.DstPath,
+		State:        task.State,
+		AlistTaskID:  task.AlistTaskID,
+		Attempts:     task.Attempts,
+		LastError:    task.LastError,
+		NextRetryAt:  &task.NextRetryAt,
+	})
+}
+
+func (qm *QueueManager) dbLoad(store *storage.Store, dstPath string) (*SyncTask, error) {
+	row, err := store.GetSyncTaskByDstPath(dstPath)
+	if err != nil {
+		return nil, err
+	}
+	return syncTaskRowToTask(row), nil
+}
+
+func (qm *QueueManager) dbLoadAll(store *storage.Store) ([]*SyncTask, error) {
+	rows, err := store.ListAllSyncTasks()
+	if err != nil {
+		return nil, err
+	}
+	return syncTaskRowsToTasks(rows), nil
+}
+
+func syncTaskRowToTask(r *storage.SyncTaskRow) *SyncTask {
+	t := &SyncTask{
+		ID:           r.DstPath,
+		SyncConfigID: strconv.FormatInt(r.SyncConfigID, 10),
+		SrcPath:      r.SrcPath,
+		DstPath:      r.DstPath,
+		State:        r.State,
+		AlistTaskID:  r.AlistTaskID,
+		Attempts:     r.Attempts,
+		LastError:    r.LastError,
+		CreatedAt:    r.CreatedAt,
+		UpdatedAt:    r.UpdatedAt,
+	}
+	if r.NextRetryAt != nil {
+		t.NextRetryAt = *r.NextRetryAt
+	}
+	return t
+}
+
+func syncTaskRowsToTasks(rows []*storage.SyncTaskRow) []*SyncTask {
+	tasks := make([]*SyncTask, len(rows))
+	for i, r := range rows {
+		tasks[i] = syncTaskRowToTask(r)
+	}
+	return tasks
+}
+
+// ==================== JSON 文件实现 ====================
+
+func (qm *QueueManager) fileSave(task *SyncTask) error {
 	data, err := json.MarshalIndent(task, "", "  ")
 	if err != nil {
 		return err
@@ -56,8 +163,7 @@ func (qm *QueueManager) Save(task *SyncTask) error {
 	return os.Rename(tmpPath, path)
 }
 
-// Load 从磁盘加载单个任务
-func (qm *QueueManager) Load(taskID string) (*SyncTask, error) {
+func (qm *QueueManager) fileLoad(taskID string) (*SyncTask, error) {
 	data, err := os.ReadFile(qm.taskFilePath(taskID))
 	if err != nil {
 		return nil, err
@@ -69,13 +175,11 @@ func (qm *QueueManager) Load(taskID string) (*SyncTask, error) {
 	return &task, nil
 }
 
-// Delete 删除任务文件
-func (qm *QueueManager) Delete(taskID string) error {
+func (qm *QueueManager) fileDelete(taskID string) error {
 	return os.Remove(qm.taskFilePath(taskID))
 }
 
-// LoadAll 加载队列目录中所有任务
-func (qm *QueueManager) LoadAll() ([]*SyncTask, error) {
+func (qm *QueueManager) fileLoadAll() ([]*SyncTask, error) {
 	entries, err := os.ReadDir(qm.queueDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -90,7 +194,7 @@ func (qm *QueueManager) LoadAll() ([]*SyncTask, error) {
 			continue
 		}
 		taskID := strings.TrimSuffix(entry.Name(), ".json")
-		task, err := qm.Load(taskID)
+		task, err := qm.fileLoad(taskID)
 		if err != nil {
 			continue
 		}
@@ -103,9 +207,8 @@ func (qm *QueueManager) LoadAll() ([]*SyncTask, error) {
 	return tasks, nil
 }
 
-// LoadByState 加载指定状态的任务
-func (qm *QueueManager) LoadByState(state string) ([]*SyncTask, error) {
-	all, err := qm.LoadAll()
+func (qm *QueueManager) fileLoadByState(state string) ([]*SyncTask, error) {
+	all, err := qm.fileLoadAll()
 	if err != nil {
 		return nil, err
 	}
