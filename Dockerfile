@@ -49,7 +49,7 @@ RUN apk add --no-cache ca-certificates tzdata
 ENV TZ=Asia/Shanghai
 
 # 创建目录
-RUN mkdir -p /config /logs /fonts /media
+RUN mkdir -p /config /logs /fonts /media /data
 
 WORKDIR /app
 
@@ -60,7 +60,7 @@ COPY --from=builder /build/autofilm /app/autofilm
 RUN chmod +x /app/autofilm
 
 # 挂载点
-VOLUME ["/config", "/logs", "/fonts", "/media"]
+VOLUME ["/config", "/logs", "/fonts", "/media", "/data"]
 
 # 默认命令
 CMD ["/app/autofilm"]

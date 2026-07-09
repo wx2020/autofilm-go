@@ -11,6 +11,7 @@ services:
       - ./logs:/logs
       - ./fonts:/fonts:ro
       - ./media:/media
+      - ./data:/data
 
     ports:
       - "8080:8080"

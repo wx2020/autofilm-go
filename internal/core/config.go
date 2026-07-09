@@ -35,6 +35,7 @@ type SettingManager struct {
 	configDir string
 	logDir    string
 	cacheDir  string
+	dataDir   string
 	debug     bool
 	timezone  string
 	viper     *viper.Viper
@@ -59,11 +60,13 @@ func (sm *SettingManager) init() {
 		sm.configDir = filepath.Join(filepath.Dir(exePath), "config")
 		sm.logDir = filepath.Join(filepath.Dir(exePath), "logs")
 		sm.cacheDir = filepath.Join(filepath.Dir(exePath), "config", "cache")
+		sm.dataDir = filepath.Join(filepath.Dir(exePath), "data")
 	} else {
 		// 开发环境
 		sm.configDir = "config"
 		sm.logDir = "logs"
 		sm.cacheDir = filepath.Join("config", "cache")
+		sm.dataDir = "data"
 	}
 
 	// 创建必要的目录
@@ -78,6 +81,7 @@ func (sm *SettingManager) mkdir() {
 	os.MkdirAll(sm.configDir, 0755)
 	os.MkdirAll(sm.logDir, 0755)
 	os.MkdirAll(sm.cacheDir, 0755)
+	os.MkdirAll(sm.dataDir, 0755)
 }
 
 // loadConfig 加载配置文件
@@ -217,6 +221,11 @@ func (sm *SettingManager) GetLogDir() string {
 // GetCacheDir 获取缓存目录
 func (sm *SettingManager) GetCacheDir() string {
 	return sm.cacheDir
+}
+
+// GetDataDir 获取数据目录（存放 autofilm.db 等）
+func (sm *SettingManager) GetDataDir() string {
+	return sm.dataDir
 }
 
 // GetConfigFile 获取配置文件路径

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/akimio/autofilm/internal/modules/alist2strm"
 	"github.com/akimio/autofilm/internal/modules/ani2alist"
 	"github.com/akimio/autofilm/internal/modules/libraryposter"
+	"github.com/akimio/autofilm/internal/storage"
 	"github.com/akimio/autofilm/internal/web"
 	"github.com/robfig/cron/v3"
 )
@@ -22,6 +24,9 @@ var logger = core.GetLogger()
 
 // 全局 alissync 守护协程列表，用于优雅关闭
 var alissyncDaemons []*alissync.RetryDaemon
+
+// 全局数据库存储
+var dbStore *storage.Store
 
 func main() {
 	// 打印启动横幅
@@ -40,6 +45,29 @@ func main() {
 
 	logger.Infof("AutoFilm %s 启动中...", core.AppVersion())
 	logger.Debugf("是否开启DEBUG模式: %v", settings.IsDebug())
+
+	// 初始化 SQLite 数据库（P3）
+	dataDir := settings.GetDataDir()
+	dbCfg := storage.DefaultConfig(dataDir)
+	database, err := storage.InitDB(dbCfg)
+	if err != nil {
+		logger.Warnf("初始化数据库失败，将使用 JSON 文件存储: %v", err)
+	} else {
+		// 执行数据库迁移
+		migrationsDir := filepath.Join(settings.GetConfigDir(), "..", "internal", "storage", "migrations")
+		if err := storage.RunMigrations(database, migrationsDir); err != nil {
+			logger.Warnf("数据库迁移失败: %v", err)
+		}
+
+		// 加载/生成加密密钥
+		key, err := storage.LoadOrCreateKey(dataDir)
+		if err != nil {
+			logger.Warnf("初始化加密密钥失败: %v", err)
+		}
+
+		dbStore = storage.NewStore(database, key)
+		logger.Info("数据库初始化完成")
+	}
 
 	// 创建上下文
 	ctx, cancel := context.WithCancel(context.Background())
