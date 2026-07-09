@@ -14,6 +14,7 @@ import (
 	"github.com/akimio/autofilm/internal/core"
 	"github.com/akimio/autofilm/pkg/httpclient"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 )
 
 var (
@@ -23,16 +24,17 @@ var (
 
 // AlistClient Alist客户端
 type AlistClient struct {
-	url        string
-	username   string
-	password   string
-	token      string
-	basePath   string
-	id         int
-	httpClient *httpclient.HTTPClient
-	logger     *logrus.Logger
-	tokenMu    sync.RWMutex
-	tokenExp   int64
+	url         string
+	username    string
+	password    string
+	token       string
+	basePath    string
+	id          int
+	httpClient  *httpclient.HTTPClient
+	logger      *logrus.Logger
+	tokenMu     sync.RWMutex
+	tokenExp    int64
+	rateLimiter *rate.Limiter
 }
 
 // AlistPath Alist文件路径信息
@@ -225,7 +227,22 @@ func (c *AlistClient) makeHeaders() map[string]string {
 	}
 }
 
+// SetRateLimit 设置 QPS 限流
+func (c *AlistClient) SetRateLimit(qps int) {
+	if qps <= 0 {
+		c.rateLimiter = nil
+		return
+	}
+	c.rateLimiter = rate.NewLimiter(rate.Limit(qps), qps)
+}
+
 func (c *AlistClient) doRequest(ctx context.Context, method, endpoint string, jsonData []byte) (*APIResponse, error) {
+	if c.rateLimiter != nil {
+		if err := c.rateLimiter.Wait(ctx); err != nil {
+			return nil, fmt.Errorf("限流等待失败: %w", err)
+		}
+	}
+
 	url := c.url + endpoint
 	headers := c.makeHeaders()
 
@@ -366,6 +383,45 @@ func (c *AlistClient) FSList(ctx context.Context, dirPath string) ([]AlistPath, 
 				c.logger.Warnf("[WARN] 获取文件下载链接失败: %s, 错误: %v", fullPath, err)
 			}
 		}
+	}
+
+	return result.Content, nil
+}
+
+// FSListLight 获取文件列表（轻量版，不发起 fs/get 请求）
+// 返回的文件信息不含 RawURL；仅用于增量快照收集，降低请求量
+func (c *AlistClient) FSListLight(ctx context.Context, dirPath string) ([]AlistPath, error) {
+	type ListRequest struct {
+		Path     string `json:"path"`
+		Password string `json:"password"`
+		Page     int    `json:"page"`
+		PerPage  int    `json:"per_page"`
+		Refresh  bool   `json:"refresh"`
+	}
+
+	req := ListRequest{
+		Path:     dirPath,
+		Password: "",
+		Page:     1,
+		PerPage:  0,
+		Refresh:  false,
+	}
+
+	jsonData, _ := json.Marshal(req)
+	resp, err := c.doRequest(ctx, "POST", "/api/fs/list", jsonData)
+	if err != nil {
+		return nil, err
+	}
+
+	var result FSListResponse
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, err
+	}
+
+	for i := range result.Content {
+		result.Content[i].ServerURL = c.url
+		result.Content[i].BasePath = c.basePath
+		result.Content[i].FullPath = dirPath + "/" + result.Content[i].Name
 	}
 
 	return result.Content, nil

@@ -289,6 +289,8 @@ func parseAlist2StrmConfig(m map[string]interface{}) (*alist2strm.Config, error)
 		WaitTime:       getFloat64(m, "wait_time"),
 		SyncServer:     getBool(m, "sync_server"),
 		SyncIgnore:     getString(m, "sync_ignore"),
+		ScanMode:       getString(m, "scan_mode"),
+		QPSLimit:       getInt(m, "qps_limit"),
 		Cron:           getString(m, "cron"),
 	}
 

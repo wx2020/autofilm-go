@@ -44,6 +44,8 @@ type Config struct {
 	SyncIgnore      string
 	SmartProtection *SmartProtectionConfig
 	Cron            string
+	ScanMode        string // "full" 或 "incremental"，默认 "incremental"
+	QPSLimit        int    // QPS 限制，0 表示自动计算
 }
 
 // SmartProtectionConfig 智能保护配置
@@ -66,6 +68,7 @@ type Alist2Strm struct {
 	processedMu     sync.RWMutex
 	downloadSem     chan struct{} // 限制并发下载文件数（与 strm 生成独立）
 	logger          *logrus.Logger
+	cacheDir        string
 }
 
 // New 创建新的Alist2Strm实例
@@ -121,12 +124,25 @@ func New(cfg *Config) (*Alist2Strm, error) {
 			cfg.SmartProtection.Threshold, cfg.SmartProtection.GraceScans)
 	}
 
+	// 初始化快照缓存目录
+	a2s.cacheDir = filepath.Join(core.GetSettings().GetConfigDir(), "cache")
+
 	return a2s, nil
 }
 
 // Run 运行Alist2Strm处理
 func (a2s *Alist2Strm) Run(ctx context.Context) error {
-	a2s.logger.Info("开始Alist2Strm处理")
+	switch a2s.config.ScanMode {
+	case "full":
+		return a2s.runFull(ctx)
+	default:
+		return a2s.runIncremental(ctx)
+	}
+}
+
+// runFull 全量扫描模式（原有 IterPath 行为）
+func (a2s *Alist2Strm) runFull(ctx context.Context) error {
+	a2s.logger.Info("开始Alist2Strm全量扫描")
 
 	waitTime := time.Duration(a2s.config.WaitTime) * time.Second
 
@@ -231,8 +247,161 @@ Done:
 		}
 	}
 
-	a2s.logger.Info("Alist2Strm处理完成")
+	a2s.logger.Info("Alist2Strm全量扫描完成")
 	return nil
+}
+
+// runIncremental 增量扫描模式
+func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
+	a2s.logger.Info("开始Alist2Strm增量扫描")
+
+	// 设置 QPS 限流
+	qps := a2s.calcQPS()
+	if qps > 0 {
+		a2s.client.SetRateLimit(qps)
+		a2s.logger.Debugf("QPS限流已设置: %d", qps)
+	}
+
+	waitTime := time.Duration(a2s.config.WaitTime) * time.Second
+
+	// 加载历史快照
+	oldSnap, err := LoadSnapshot(a2s.config.ID, a2s.cacheDir)
+	if err != nil {
+		a2s.logger.Warnf("加载快照失败: %v，回退至全量扫描", err)
+		return a2s.runFull(ctx)
+	}
+
+	// 轻量递归遍历（不调用 fs/get）
+	files, err := a2s.iterPathLight(ctx, a2s.config.SourceDir, waitTime)
+	if err != nil {
+		a2s.logger.Errorf("增量遍历失败: %v，回退至全量扫描", err)
+		return a2s.runFull(ctx)
+	}
+
+	// 构建新快照
+	newSnap := BuildSnapshot(files)
+
+	startTime := time.Now()
+
+	// diff 变更
+	var added, modified, deleted []string
+	if oldSnap != nil {
+		added, modified, deleted = DiffSnapshots(oldSnap, newSnap)
+	} else {
+		a2s.logger.Info("无历史快照，首次运行全量处理")
+		for path := range newSnap.Files {
+			added = append(added, path)
+		}
+	}
+
+	elapsed := time.Since(startTime)
+	a2s.logger.Infof("增量扫描结果: 全量=%d, 新增=%d, 修改=%d, 删除=%d, 耗时=%v",
+		len(newSnap.Files), len(added), len(modified), len(deleted), elapsed)
+
+	// 处理新增和修改的文件
+	changed := append(added, modified...)
+	if len(changed) > 0 {
+		maxWorkers := a2s.config.MaxWorkers
+		if maxWorkers <= 0 {
+			maxWorkers = 50
+		}
+
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, maxWorkers)
+
+		for _, fullPath := range changed {
+			if ctx.Err() != nil {
+				break
+			}
+
+			// 仅对变更文件调 fs/get 获取 RawURL（典型 1% 量级）
+			fileDetail, err := a2s.client.FSGet(ctx, fullPath)
+			if err != nil {
+				a2s.logger.Warnf("获取文件详情失败 %s: %v", fullPath, err)
+				continue
+			}
+
+			// 检查是否应处理该文件（含扩展名过滤、BDMV 收集）
+			if !a2s.shouldProcessFile(fileDetail) {
+				continue
+			}
+
+			wg.Add(1)
+			p := fileDetail
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}
+				a2s.processFile(ctx, p)
+				<-sem
+			}()
+		}
+		wg.Wait()
+	}
+
+	// 完成BDMV文件收集
+	a2s.bdmvManager.Finalize()
+
+	// 处理BDMV最大文件
+	for _, largestFile := range a2s.bdmvManager.GetLargestFiles() {
+		var fileToProcess *alist.AlistPath
+		if a2s.mode == RawURLMode && largestFile.RawURL == "" {
+			detailed, err := a2s.client.FSGet(ctx, largestFile.FullPath)
+			if err != nil {
+				a2s.logger.Warnf("重新获取BDMV文件详细信息失败: %v", err)
+				fileToProcess = largestFile
+			} else {
+				fileToProcess = detailed
+			}
+		} else {
+			fileToProcess = largestFile
+		}
+
+		a2s.processFile(ctx, fileToProcess)
+		localPath := a2s.getLocalPath(fileToProcess)
+		a2s.addProcessedPath(localPath)
+	}
+
+	// 标记快照中所有文件为已处理（供 cleanupLocalFiles 使用）
+	a2s.markSnapshotProcessed(newSnap)
+
+	// 保存快照
+	if err := SaveSnapshot(a2s.config.ID, a2s.cacheDir, newSnap); err != nil {
+		a2s.logger.Errorf("保存快照失败: %v", err)
+	}
+
+	// 保存保护状态
+	if a2s.protection != nil {
+		if err := a2s.protection.Save(); err != nil {
+			a2s.logger.Errorf("保存保护状态失败: %v", err)
+		}
+	}
+
+	// 同步服务器（清理本地文件，含已删除文件）
+	if a2s.config.SyncServer {
+		if err := a2s.cleanupLocalFiles(ctx); err != nil {
+			a2s.logger.Errorf("清理本地文件失败: %v", err)
+		} else {
+			a2s.logger.Info("清理过期的.strm文件完成")
+		}
+	}
+
+	a2s.logger.Info("Alist2Strm增量扫描完成")
+	return nil
+}
+
+// calcQPS 计算 QPS 限制值
+func (a2s *Alist2Strm) calcQPS() int {
+	if a2s.config.QPSLimit > 0 {
+		return a2s.config.QPSLimit
+	}
+	qps := a2s.config.MaxWorkers / 2
+	if qps <= 0 {
+		qps = 1
+	}
+	if qps > 10 {
+		qps = 10
+	}
+	return qps
 }
 
 // shouldProcessFile 判断是否应该处理该文件
@@ -421,6 +590,36 @@ func (a2s *Alist2Strm) getLocalPath(path *alist.AlistPath) string {
 	}
 
 	return localPath
+}
+
+// getLocalPathFromRemote 根据远端路径计算本地路径（不依赖 AlistPath 对象）
+func (a2s *Alist2Strm) getLocalPathFromRemote(remotePath string) string {
+	if a2s.config.FlattenMode {
+		return filepath.Join(a2s.config.TargetDir, filepath.Base(remotePath))
+	}
+
+	relPath := strings.TrimPrefix(remotePath, a2s.config.SourceDir)
+	if strings.HasPrefix(relPath, "/") {
+		relPath = relPath[1:]
+	}
+
+	localPath := filepath.Join(a2s.config.TargetDir, relPath)
+
+	if extensions.IsVideoExt(filepath.Ext(localPath)) {
+		localPath = localPath[:len(localPath)-len(filepath.Ext(localPath))] + ".strm"
+	}
+
+	return localPath
+}
+
+// markSnapshotProcessed 将快照中所有文件的本地路径标记为已处理
+func (a2s *Alist2Strm) markSnapshotProcessed(snap *Snapshot) {
+	a2s.processedMu.Lock()
+	defer a2s.processedMu.Unlock()
+	for remotePath := range snap.Files {
+		localPath := a2s.getLocalPathFromRemote(remotePath)
+		a2s.processedPaths[localPath] = struct{}{}
+	}
 }
 
 // cleanupLocalFiles 清理本地已删除的文件

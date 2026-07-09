@@ -34,6 +34,7 @@ var (
 type SettingManager struct {
 	configDir string
 	logDir    string
+	cacheDir  string
 	debug     bool
 	timezone  string
 	viper     *viper.Viper
@@ -57,10 +58,12 @@ func (sm *SettingManager) init() {
 	if exePath, err := os.Executable(); err == nil {
 		sm.configDir = filepath.Join(filepath.Dir(exePath), "config")
 		sm.logDir = filepath.Join(filepath.Dir(exePath), "logs")
+		sm.cacheDir = filepath.Join(filepath.Dir(exePath), "config", "cache")
 	} else {
 		// 开发环境
 		sm.configDir = "config"
 		sm.logDir = "logs"
+		sm.cacheDir = filepath.Join("config", "cache")
 	}
 
 	// 创建必要的目录
@@ -74,6 +77,7 @@ func (sm *SettingManager) init() {
 func (sm *SettingManager) mkdir() {
 	os.MkdirAll(sm.configDir, 0755)
 	os.MkdirAll(sm.logDir, 0755)
+	os.MkdirAll(sm.cacheDir, 0755)
 }
 
 // loadConfig 加载配置文件
@@ -138,6 +142,8 @@ Alist2StrmList: []
   #     enabled: false
   #     threshold: 100
   #     grace_scans: 3
+  #   scan_mode: "incremental"          # 扫描模式: full（全量）| incremental（增量），默认 incremental
+  #   qps_limit: 10                     # QPS 限制，0 表示自动计算（max_workers/2，最大 10）
   #   cron: "0 */6 * * *"
 
 Ani2AlistList: []
@@ -186,6 +192,11 @@ func (sm *SettingManager) GetConfigDir() string {
 // GetLogDir 获取日志文件目录
 func (sm *SettingManager) GetLogDir() string {
 	return sm.logDir
+}
+
+// GetCacheDir 获取缓存目录
+func (sm *SettingManager) GetCacheDir() string {
+	return sm.cacheDir
 }
 
 // GetConfigFile 获取配置文件路径
