@@ -177,6 +177,26 @@ LibraryPosterList: []
   #       subtitle: "Movie Library"
   #       limit: 15
   #   cron: "0 4 * * *"
+
+AlistSyncList: []
+  # - id: "cloud-a-to-b"
+  #   enable: true
+  #   run_on_start: false
+  #   url: "http://localhost:5244"
+  #   username: ""
+  #   password: ""
+  #   token: ""
+  #   pairs:
+  #     - src: "/aliyun/Movies"
+  #       dst: "/backup/Movies"
+  #       delete_src: false
+  #       overwrite: "if_newer"          # never | always | if_newer
+  #   retry:
+  #     max_attempts: 10
+  #     backoff: "expo"
+  #     jitter: 0.2
+  #   wait_time: 0
+  #   cron: "0 */2 * * *"
 `
 
 	if err := os.WriteFile(configFile, []byte(defaultConfig), 0644); err != nil {
@@ -233,6 +253,13 @@ func (sm *SettingManager) GetAlistServerList() []map[string]interface{} {
 func (sm *SettingManager) GetAni2AlistList() []map[string]interface{} {
 	var result []map[string]interface{}
 	sm.viper.UnmarshalKey("Ani2AlistList", &result)
+	return result
+}
+
+// GetAlistSyncList 获取 AlistSync 同步列表
+func (sm *SettingManager) GetAlistSyncList() []map[string]interface{} {
+	var result []map[string]interface{}
+	sm.viper.UnmarshalKey("AlistSyncList", &result)
 	return result
 }
 

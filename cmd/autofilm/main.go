@@ -9,6 +9,7 @@ import (
 
 	"github.com/akimio/autofilm/internal/core"
 	"github.com/akimio/autofilm/internal/extensions"
+	"github.com/akimio/autofilm/internal/modules/alissync"
 	"github.com/akimio/autofilm/internal/modules/alist2strm"
 	"github.com/akimio/autofilm/internal/modules/ani2alist"
 	"github.com/akimio/autofilm/internal/modules/libraryposter"
@@ -16,6 +17,9 @@ import (
 )
 
 var logger = core.GetLogger()
+
+// 全局 alissync 守护协程列表，用于优雅关闭
+var alissyncDaemons []*alissync.RetryDaemon
 
 func main() {
 	// 打印启动横幅
@@ -63,6 +67,13 @@ func main() {
 		logger.Info("LibraryPoster任务添加完成")
 	}
 
+	// 添加AlistSync任务
+	if err := addAlistSyncJobs(cronScheduler); err != nil {
+		logger.Errorf("添加AlistSync任务失败: %v", err)
+	} else {
+		logger.Info("AlistSync任务添加完成")
+	}
+
 	// 启动调度器
 	cronScheduler.Start()
 	logger.Info("AutoFilm启动完成")
@@ -77,6 +88,11 @@ func main() {
 	// 停止调度器
 	stopCtx := cronScheduler.Stop()
 	<-stopCtx.Done()
+
+	// 停止 alissync 守护协程
+	for _, d := range alissyncDaemons {
+		d.Stop()
+	}
 
 	logger.Info("AutoFilm程序退出！")
 
@@ -262,6 +278,116 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 	}
 
 	return nil
+}
+
+// addAlistSyncJobs 添加AlistSync定时任务
+func addAlistSyncJobs(c *cron.Cron) error {
+	settings := core.GetSettings()
+	list := settings.GetAlistSyncList()
+
+	if len(list) == 0 {
+		logger := core.GetLogger()
+		logger.Warn("未检测到AlistSync模块配置")
+		return nil
+	}
+
+	logger := core.GetLogger()
+	logger.Info("检测到AlistSync模块配置，正在添加至后台任务")
+
+	for _, s := range list {
+		config, err := parseAlistSyncConfig(s)
+		if err != nil {
+			logger.Errorf("解析AlistSync配置失败: %v", err)
+			continue
+		}
+
+		if !config.Enable {
+			logger.Infof("AlistSync %s 已禁用（enable: false），跳过", config.ID)
+			continue
+		}
+
+		if config.Cron == "" {
+			logger.Warnf("AlistSync %s 未设置cron表达式", config.ID)
+			continue
+		}
+
+		runSync := func() {
+			ctx := context.Background()
+			syncer, err := alissync.New(config)
+			if err != nil {
+				logger.Errorf("创建AlistSync实例失败: %v", err)
+				return
+			}
+			alissyncDaemons = append(alissyncDaemons, syncer.Daemon())
+			if err := syncer.Run(ctx); err != nil {
+				logger.Errorf("AlistSync运行失败: %v", err)
+			}
+		}
+
+		_, err = c.AddFunc(config.Cron, runSync)
+
+		if err != nil {
+			logger.Errorf("添加定时任务失败 %s: %v", config.ID, err)
+		} else {
+			logger.Infof("AlistSync %s 已被添加至后台任务 (cron: %s)", config.ID, config.Cron)
+		}
+
+		if config.RunOnStart {
+			logger.Infof("AlistSync %s 已配置 run_on_start，启动时立即执行一次", config.ID)
+			go runSync()
+		}
+	}
+
+	return nil
+}
+
+// parseAlistSyncConfig 解析AlistSync配置
+func parseAlistSyncConfig(m map[string]interface{}) (*alissync.Config, error) {
+	config := &alissync.Config{
+		ID:         getString(m, "id"),
+		Enable:     getEnable(m, "enable"),
+		RunOnStart: getBool(m, "run_on_start"),
+		URL:        getString(m, "url"),
+		Username:   getString(m, "username"),
+		Password:   getString(m, "password"),
+		Token:      getString(m, "token"),
+		WaitTime:   getFloat64(m, "wait_time"),
+		Cron:       getString(m, "cron"),
+	}
+
+	// 解析 pairs
+	if pairsRaw, ok := m["pairs"].([]interface{}); ok {
+		for _, p := range pairsRaw {
+			if pairMap, ok := p.(map[string]interface{}); ok {
+				pair := alissync.PairConfig{
+					Src:       getString(pairMap, "src"),
+					Dst:       getString(pairMap, "dst"),
+					DeleteSrc: getBool(pairMap, "delete_src"),
+					Overwrite: getString(pairMap, "overwrite"),
+				}
+				config.Pairs = append(config.Pairs, pair)
+			}
+		}
+	}
+
+	// 解析 retry
+	if retryRaw, ok := m["retry"].(map[string]interface{}); ok {
+		config.Retry = alissync.RetryConfig{
+			MaxAttempts: getInt(retryRaw, "max_attempts"),
+			Backoff:     getString(retryRaw, "backoff"),
+			Jitter:      getFloat64(retryRaw, "jitter"),
+		}
+	}
+
+	// 默认值
+	if config.Retry.MaxAttempts <= 0 {
+		config.Retry.MaxAttempts = 10
+	}
+	if config.Retry.Backoff == "" {
+		config.Retry.Backoff = "expo"
+	}
+
+	return config, nil
 }
 
 // parseAlist2StrmConfig 解析Alist2Strm配置

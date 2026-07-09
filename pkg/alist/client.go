@@ -467,6 +467,89 @@ func (c *AlistClient) FSGet(ctx context.Context, path string) (*AlistPath, error
 	return &result, nil
 }
 
+// FSPutFile 文件上传请求中的文件项
+type FSPutFile struct {
+	Path string `json:"path"`
+	URL  string `json:"url"`
+}
+
+// TaskInfoData 任务状态信息
+type TaskInfoData struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	State    string `json:"state"` // succeeded, failed, canceled, running
+	Status   string `json:"status"`
+	Progress int    `json:"progress"`
+}
+
+// FSMkdir 创建目录（类似 mkdir -p，可递归创建）
+func (c *AlistClient) FSMkdir(ctx context.Context, dirPath string) error {
+	req := map[string]string{"path": dirPath}
+	jsonData, _ := json.Marshal(req)
+	_, err := c.doRequest(ctx, "POST", "/api/fs/mkdir", jsonData)
+	return err
+}
+
+// FSPut 提交异步文件上传任务
+// dstPath: 目标目录路径
+// files: 要上传的文件列表（path=文件名, url=源文件直链）
+// 返回值: alist_task_id（异步任务ID）
+func (c *AlistClient) FSPut(ctx context.Context, dstPath string, files []FSPutFile) (string, error) {
+	req := struct {
+		Path  string     `json:"path"`
+		Files []FSPutFile `json:"files"`
+	}{
+		Path:  dstPath,
+		Files: files,
+	}
+
+	jsonData, _ := json.Marshal(req)
+	resp, err := c.doRequest(ctx, "POST", "/api/fs/put", jsonData)
+	if err != nil {
+		return "", err
+	}
+
+	var result struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return "", fmt.Errorf("解析任务ID失败: %w", err)
+	}
+	return result.TaskID, nil
+}
+
+// TaskInfo 查询异步任务状态
+func (c *AlistClient) TaskInfo(ctx context.Context, taskID string) (*TaskInfoData, error) {
+	req := map[string]string{"id": taskID}
+	jsonData, _ := json.Marshal(req)
+	resp, err := c.doRequest(ctx, "POST", "/api/admin/task/task_info", jsonData)
+	if err != nil {
+		return nil, err
+	}
+
+	var result TaskInfoData
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("解析任务信息失败: %w", err)
+	}
+	return &result, nil
+}
+
+// TaskCancel 取消异步任务
+func (c *AlistClient) TaskCancel(ctx context.Context, taskID string) error {
+	req := map[string]string{"id": taskID}
+	jsonData, _ := json.Marshal(req)
+	_, err := c.doRequest(ctx, "POST", "/api/admin/task/cancel", jsonData)
+	return err
+}
+
+// TaskRetry 重试失败的异步任务
+func (c *AlistClient) TaskRetry(ctx context.Context, taskID string) error {
+	req := map[string]string{"id": taskID}
+	jsonData, _ := json.Marshal(req)
+	_, err := c.doRequest(ctx, "POST", "/api/admin/task/retry", jsonData)
+	return err
+}
+
 // AdminStorageList 列出存储列表（需要管理员权限）
 func (c *AlistClient) AdminStorageList(ctx context.Context) ([]AlistStorage, error) {
 	resp, err := c.doRequest(ctx, "GET", "/api/admin/storage/list", nil)
