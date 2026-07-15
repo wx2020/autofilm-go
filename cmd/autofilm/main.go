@@ -181,10 +181,39 @@ func main() {
 	extensions.PrintBanner(core.AppVersion())
 }
 
+func getAlist2StrmList() []map[string]interface{} {
+	if s := storage.GlobalStore(); s != nil {
+		list, err := s.ListAlist2StrmConfigs()
+		if err == nil && len(list) > 0 {
+			return list
+		}
+	}
+	return core.GetSettings().GetAlistServerList()
+}
+
+func getAni2AlistList() []map[string]interface{} {
+	if s := storage.GlobalStore(); s != nil {
+		list, err := s.ListAni2AlistConfigs()
+		if err == nil && len(list) > 0 {
+			return list
+		}
+	}
+	return core.GetSettings().GetAni2AlistList()
+}
+
+func getAlisyncList() []map[string]interface{} {
+	if s := storage.GlobalStore(); s != nil {
+		list, err := s.ListAlisyncConfigs()
+		if err == nil && len(list) > 0 {
+			return list
+		}
+	}
+	return core.GetSettings().GetAlistSyncList()
+}
+
 // addAlist2StrmJobs 添加Alist2Strm定时任务
 func addAlist2StrmJobs(c *cron.Cron) error {
-	settings := core.GetSettings()
-	serverList := settings.GetAlistServerList()
+	serverList := getAlist2StrmList()
 
 	if len(serverList) == 0 {
 		logger := core.GetLogger()
@@ -247,8 +276,7 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 
 // addAni2AlistJobs 添加Ani2Alist定时任务
 func addAni2AlistJobs(c *cron.Cron) error {
-	settings := core.GetSettings()
-	list := settings.GetAni2AlistList()
+	list := getAni2AlistList()
 
 	if len(list) == 0 {
 		logger := core.GetLogger()
@@ -375,8 +403,7 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 
 // addAlistSyncJobs 添加AlistSync定时任务
 func addAlistSyncJobs(c *cron.Cron) error {
-	settings := core.GetSettings()
-	list := settings.GetAlistSyncList()
+	list := getAlisyncList()
 
 	if len(list) == 0 {
 		logger := core.GetLogger()

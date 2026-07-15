@@ -92,6 +92,142 @@ func (s *Store) FindOrCreateConnection(name, url, username, password, token, pub
 	return s.CreateConnection(c)
 }
 
+// ==================== 模块配置查询（返回 map 格式兼容 viper） ====================
+
+// ListAlist2StrmConfigs 从 DB 读取所有 Alist2Strm 配置，返回 viper 兼容的 map 切片
+func (s *Store) ListAlist2StrmConfigs() ([]map[string]interface{}, error) {
+	return s.listConfigs("alist2strm_configs", s.scanAlist2StrmConfig)
+}
+
+// ListAlisyncConfigs 从 DB 读取所有 Alisync 配置
+func (s *Store) ListAlisyncConfigs() ([]map[string]interface{}, error) {
+	return s.listConfigs("alisync_configs", s.scanAlisyncConfig)
+}
+
+// ListAni2AlistConfigs 从 DB 读取所有 Ani2Alist 配置
+func (s *Store) ListAni2AlistConfigs() ([]map[string]interface{}, error) {
+	return s.listConfigs("ani2alist_configs", s.scanAni2AlistConfig)
+}
+
+func (s *Store) listConfigs(table string, scan func(*sql.Rows) (map[string]interface{}, error)) ([]map[string]interface{}, error) {
+	query := `SELECT c.*, a.name, a.url, a.username, a.password, a.token, a.public_url
+		FROM ` + table + ` c JOIN alist_connections a ON c.connection_id = a.id ORDER BY c.id`
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []map[string]interface{}
+	for rows.Next() {
+		m, err := scan(rows)
+		if err != nil {
+			continue
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) scanAlist2StrmConfig(rows *sql.Rows) (map[string]interface{}, error) {
+	var (
+		id, cfgID, srcDir, tgtDir, mode, otherExt, syncIgnore, smartJSON, sMode, cron string
+		enable, runOnStart, flattenMode, subtitle, image, nfo, overwrite, syncServer bool
+		maxWorkers, maxDownloaders, qpsLimit, connID int
+		waitTime float64
+		createdAt, updatedAt string
+		connName, url, username, password, token, publicURL string
+	)
+	err := rows.Scan(&id, &cfgID, &enable, &runOnStart, &connID,
+		&srcDir, &tgtDir, &flattenMode, &subtitle, &image, &nfo,
+		&mode, &overwrite, &otherExt, &maxWorkers, &maxDownloaders,
+		&waitTime, &syncServer, &syncIgnore, &smartJSON,
+		&sMode, &qpsLimit, &cron, &createdAt, &updatedAt,
+		&connName, &url, &username, &password, &token, &publicURL)
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]interface{}{
+		"id": cfgID, "enable": enable, "run_on_start": runOnStart,
+		"url": url, "username": username, "password": password, "token": token, "public_url": publicURL,
+		"source_dir": srcDir, "target_dir": tgtDir, "flatten_mode": flattenMode,
+		"subtitle": subtitle, "image": image, "nfo": nfo, "mode": mode, "overwrite": overwrite,
+		"other_ext": otherExt, "max_workers": maxWorkers, "max_downloaders": maxDownloaders,
+		"wait_time": waitTime, "sync_server": syncServer, "sync_ignore": syncIgnore,
+		"scan_mode": sMode, "qps_limit": qpsLimit, "cron": cron,
+	}
+	if smartJSON != "" {
+		var sp map[string]interface{}
+		json.Unmarshal([]byte(smartJSON), &sp)
+		if sp != nil {
+			m["smart_protection"] = sp
+		}
+	}
+	return m, nil
+}
+
+func (s *Store) scanAlisyncConfig(rows *sql.Rows) (map[string]interface{}, error) {
+	var (
+		id, cfgID, pairsJSON, retryJSON, cron string
+		enable, runOnStart bool
+		connID int
+		createdAt, updatedAt string
+		connName, url, username, password, token string
+	)
+	err := rows.Scan(&id, &cfgID, &enable, &runOnStart, &connID,
+		&pairsJSON, &retryJSON, &cron, &createdAt, &updatedAt,
+		&connName, &url, &username, &password, &token)
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]interface{}{
+		"id": cfgID, "enable": enable, "run_on_start": runOnStart,
+		"url": url, "username": username, "password": password, "token": token, "cron": cron,
+	}
+	if pairsJSON != "" {
+		var pairs []interface{}
+		json.Unmarshal([]byte(pairsJSON), &pairs)
+		m["pairs"] = pairs
+	}
+	if retryJSON != "" {
+		var retry map[string]interface{}
+		json.Unmarshal([]byte(retryJSON), &retry)
+		m["retry"] = retry
+	}
+	return m, nil
+}
+
+func (s *Store) scanAni2AlistConfig(rows *sql.Rows) (map[string]interface{}, error) {
+	var (
+		id, cfgID, tgtDir, srcDomain, rssDomain, keyWord, cron string
+		enable, runOnStart, rssUpdate bool
+		year, month sql.NullInt64
+		connID int
+		createdAt, updatedAt string
+		connName, url, username, password, token string
+	)
+	err := rows.Scan(&id, &cfgID, &enable, &runOnStart, &connID,
+		&tgtDir, &rssUpdate, &year, &month, &srcDomain, &rssDomain, &keyWord, &cron,
+		&createdAt, &updatedAt,
+		&connName, &url, &username, &password, &token)
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]interface{}{
+		"id": cfgID, "enable": enable, "run_on_start": runOnStart,
+		"url": url, "username": username, "password": password, "token": token,
+		"target_dir": tgtDir, "rss_update": rssUpdate,
+		"src_domain": srcDomain, "rss_domain": rssDomain, "key_word": keyWord, "cron": cron,
+	}
+	if year.Valid {
+		m["year"] = int(year.Int64)
+	}
+	if month.Valid {
+		m["month"] = int(month.Int64)
+	}
+	return m, nil
+}
+
 // ==================== 快照 ====================
 
 // SnapshotEntry 快照条目

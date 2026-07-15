@@ -44,6 +44,11 @@ func (s *Server) newRouter() http.Handler {
 		r.Get("/logs", s.handleGetLogs)
 	})
 
+	// DB 配置 CRUD
+	r.Get("/configs/{type}", s.handleListDbConfigs)
+	r.Post("/configs/{type}", s.handleSaveDbConfig)
+	r.Delete("/configs/{type}/{id}", s.handleDeleteDbConfig)
+
 	// WebSocket 日志流
 	r.Get("/api/logs/stream", s.handleLogStream)
 
