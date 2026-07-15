@@ -29,14 +29,135 @@
   <main class="flex-grow-1 p-4 bg-light" style="overflow-y:auto;height:100vh">
     <router-view />
   </main>
+
+  <!-- 添加模块模态框 -->
+  <div class="modal fade" id="addModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">添加 {{ formTitle }}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <div class="mb-2 text-danger small" v-if="formError">{{ formError }}</div>
+          <div class="row g-2">
+            <div class="col-md-6 mb-2"><label class="form-label">ID *</label><input v-model="form.id" class="form-control" placeholder="唯一标识"></div>
+            <div class="col-md-6 mb-2"><label class="form-label">Cron *</label><input v-model="form.cron" class="form-control" placeholder="0 */6 * * *"></div>
+            <div class="col-md-8 mb-2"><label class="form-label">URL *</label><input v-model="form.url" class="form-control" placeholder="http://localhost:5244"></div>
+            <div class="col-md-4 mb-2"><label class="form-label">Token</label><input v-model="form.token" class="form-control" placeholder="Alist 令牌"></div>
+
+            <template v-if="formType==='alist2strm'||formType==='ani2alist'||formType==='alissync'">
+              <div class="col-md-6 mb-2"><label class="form-label">源目录 *</label><input v-if="formType!=='ani2alist'" v-model="form.source_dir" class="form-control" placeholder="/source/path">
+                <input v-else v-model="form.target_dir" class="form-control" placeholder="/Anime"></div>
+              <div class="col-md-6 mb-2"><label class="form-label">目标目录 *</label><input v-model="form.target_dir" class="form-control" placeholder="/strm/output" v-if="formType!=='ani2alist'">
+                <input v-model="form.rss_domain" class="form-control" placeholder="api.ani.rip" v-else></div>
+            </template>
+
+            <template v-if="formType==='alist2strm'">
+              <div class="col-md-4 mb-2"><label class="form-label">public_url</label><input v-model="form.public_url" class="form-control" placeholder="直链域名"></div>
+              <div class="col-md-2 mb-2"><label class="form-label">mode</label><select v-model="form.mode" class="form-select"><option>AlistURL</option><option>RawURL</option><option>AlistPath</option></select></div>
+              <div class="col-md-2 mb-2"><label class="form-label">scan_mode</label><select v-model="form.scan_mode" class="form-select"><option>incremental</option><option>full</option></select></div>
+              <div class="col-md-2 mb-2"><label class="form-label">max_workers</label><input v-model.number="form.max_workers" class="form-control" placeholder="50"></div>
+              <div class="col-md-2 mb-2"><label class="form-label">wait_time</label><input v-model.number="form.wait_time" class="form-control" placeholder="0"></div>
+              <div class="col-12"><div class="form-check form-check-inline"><input type="checkbox" v-model="form.subtitle" class="form-check-input"><label class="form-check-label">字幕</label></div>
+                <div class="form-check form-check-inline"><input type="checkbox" v-model="form.image" class="form-check-input"><label class="form-check-label">图片</label></div>
+                <div class="form-check form-check-inline"><input type="checkbox" v-model="form.nfo" class="form-check-input"><label class="form-check-label">NFO</label></div>
+                <div class="form-check form-check-inline"><input type="checkbox" v-model="form.flatten_mode" class="form-check-input"><label class="form-check-label">平铺</label></div>
+                <div class="form-check form-check-inline"><input type="checkbox" v-model="form.sync_server" class="form-check-input"><label class="form-check-label">同步删除</label></div></div>
+            </template>
+
+            <template v-if="formType==='ani2alist'">
+              <div class="col-md-6 mb-2"><label class="form-label">src_domain</label><input v-model="form.src_domain" class="form-control" placeholder="aniopen.an-i.workers.dev"></div>
+              <div class="col-md-3 mb-2"><label class="form-label">year</label><input v-model.number="form.year" class="form-control" placeholder="可选"></div>
+              <div class="col-md-3 mb-2"><label class="form-label">month</label><input v-model.number="form.month" class="form-control" placeholder="可选"></div>
+            </template>
+
+            <template v-if="formType==='libraryposter'">
+              <div class="col-md-6 mb-2"><label class="form-label">API Key *</label><input v-model="form.api_key" class="form-control" placeholder="Jellyfin API Key"></div>
+              <div class="col-md-6 mb-2"><label class="form-label">title_font</label><input v-model="form.title_font_path" class="form-control" placeholder="/fonts/title.ttf"></div>
+            </template>
+
+            <template v-if="formType==='alissync'">
+              <div class="col-12 mb-2"><label class="form-label">同步对 (JSON) *</label>
+                <textarea v-model="form.pairs_json" class="form-control font-monospace" rows="2" placeholder='[{"src":"/a","dst":"/b","overwrite":"if_newer"}]'></textarea></div>
+              <div class="col-md-4 mb-2"><label class="form-label">max_attempts</label><input v-model.number="form.max_attempts" class="form-control" placeholder="10"></div>
+              <div class="col-md-4 mb-2"><label class="form-label">backoff</label><select v-model="form.backoff" class="form-select"><option>expo</option></select></div>
+              <div class="col-md-4 mb-2"><label class="form-label">jitter</label><input v-model.number="form.jitter" class="form-control" placeholder="0.2"></div>
+            </template>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+          <button class="btn btn-primary" @click="submitForm" :disabled="saving">
+            <i class="bi-check-lg"></i> {{ saving ? '保存中...' : '保存' }}</button></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
-const { createApp, ref, reactive, onMounted, computed, watch } = Vue
+const { createApp, ref, reactive, onMounted, computed, watch, nextTick } = Vue
 const { createRouter, createWebHistory } = VueRouter
-
-// API 工具
 const api = (url, opts={}) => fetch(url, {headers:{'Content-Type':'application/json'},...opts}).then(r=>r.json())
+
+// ====== 模块配置表单状态（全局，由模态框使用）=====
+const formType = ref('alist2strm')
+const formTitle = computed(() => ({alist2strm:'Alist2Strm',ani2alist:'Ani2Alist',libraryposter:'封面生成',alissync:'Alissync'}[formType.value]||''))
+const form = reactive({id:'',cron:'0 */6 * * *',url:'',token:'',source_dir:'',target_dir:'',public_url:'',
+  mode:'AlistURL',scan_mode:'incremental',max_workers:50,max_downloaders:5,wait_time:0,
+  subtitle:false,image:false,nfo:false,flatten_mode:false,sync_server:false,
+  src_domain:'',rss_domain:'',year:null,month:null,
+  api_key:'',title_font_path:'',subtitle_font_path:'',
+  pairs_json:'',max_attempts:10,backoff:'expo',jitter:0.2})
+const formError = ref('')
+const saving = ref(false)
+
+function resetForm(type) {
+  formType.value = type
+  form.id=''; form.cron='0 */6 * * *'; form.url=''; form.token=''
+  form.source_dir=''; form.target_dir=''; form.public_url=''
+  form.mode='AlistURL'; form.scan_mode='incremental'
+  form.max_workers=50; form.max_downloaders=5; form.wait_time=0
+  form.subtitle=false; form.image=false; form.nfo=false; form.flatten_mode=false; form.sync_server=false
+  form.src_domain=''; form.rss_domain=''; form.year=null; form.month=null
+  form.api_key=''; form.title_font_path=''; form.subtitle_font_path=''
+  form.pairs_json=''; form.max_attempts=10; form.backoff='expo'; form.jitter=0.2
+  formError.value = ''
+}
+
+function buildConfig() {
+  const base = { id: form.id, cron: form.cron, url: form.url, token: form.token }
+  switch (formType.value) {
+    case 'alist2strm':
+      return {...base, source_dir: form.source_dir, target_dir: form.target_dir, public_url: form.public_url,
+        mode: form.mode, scan_mode: form.scan_mode, max_workers: form.max_workers, wait_time: form.wait_time,
+        subtitle: form.subtitle, image: form.image, nfo: form.nfo, flatten_mode: form.flatten_mode, sync_server: form.sync_server}
+    case 'ani2alist':
+      return {...base, target_dir: form.target_dir, src_domain: form.src_domain, rss_domain: form.rss_domain,
+        year: form.year, month: form.month}
+    case 'libraryposter':
+      return {...base, api_key: form.api_key, title_font_path: form.title_font_path, subtitle_font_path: form.subtitle_font_path}
+    case 'alissync':
+      let pairs = []
+      try { pairs = JSON.parse(form.pairs_json) } catch(e) {}
+      return {...base, pairs, retry: {max_attempts: form.max_attempts, backoff: form.backoff, jitter: form.jitter}}
+  }
+}
+
+async function submitForm() {
+  if (!form.id) { formError.value = 'ID 不能为空'; return }
+  if (!form.url) { formError.value = 'URL 不能为空'; return }
+  saving.value = true; formError.value = ''
+  try {
+    const d = await api('/api/config/module', {method:'POST', body:JSON.stringify({type: formType.value, config: buildConfig()})})
+    if (d.success) {
+      bootstrap.Modal.getInstance(document.getElementById('addModal')).hide()
+      // 刷新当前路由
+      window.location.reload()
+    } else {
+      formError.value = d.error || '保存失败'
+    }
+  } catch(e) { formError.value = e.message }
+  finally { saving.value = false }
+}
 
 // ====== 组件 ======
 const ModuleCard = {
@@ -50,7 +171,8 @@ const ModuleCard = {
         <button class="btn btn-sm" :class="module.enabled?'btn-warning':'btn-success'" @click="$emit('toggle')">
           <i :class="module.enabled?'bi-pause':'bi-play'"></i></button>
         <button class="btn btn-sm btn-primary" @click="$emit('run')" :disabled="!module.enabled">
-          <i class="bi-play-fill"></i> 运行</button></div></div>
+          <i class="bi-play-fill"></i> 运行</button>
+        <button class="btn btn-sm btn-outline-danger" @click="del"><i class="bi-trash"></i></button></div></div>
     <div class="mt-2 small text-muted">
       <div v-if="module.cron">Cron: <code>{{module.cron}}</code></div>
       <div v-if="nextRun">下次: {{fmt(nextRun)}}</div>
@@ -58,7 +180,8 @@ const ModuleCard = {
       <div v-if="module.last_error" class="text-danger">错误: {{module.last_error}}</div></div>
   </div></div>`,
   computed:{nextRun(){return this.module.next_run?new Date(this.module.next_run):null},lastRun(){return this.module.last_run?new Date(this.module.last_run):null}},
-  methods:{fmt(d){return d.toLocaleString('zh-CN')}}
+  methods:{fmt(d){return d.toLocaleString('zh-CN')},
+    async del(){if(!confirm('删除 '+this.module.id+'？'))return;await api('/api/config/module/'+this.module.type+'/'+this.module.id,{method:'DELETE'});location.reload()}}
 }
 
 // ====== Views ======
@@ -68,7 +191,7 @@ const Overview = { components:{ModuleCard},
       <div class="card text-center"><div class="card-body"><h5>{{s.count}}</h5><p class="text-muted mb-0">{{s.label}}</p></div></div></div></div>
     <h5 class="mb-3">模块列表</h5>
     <ModuleCard v-for="m in modules" :key="m.id" :module="m" @run="run(m)" @toggle="toggle(m)" />
-    <div v-if="!modules.length" class="text-muted p-3">暂无已配置的模块。请检查 config.yaml 是否包含模块配置。</div></div>`,
+    <div v-if="!modules.length" class="text-muted p-3">暂无已配置的模块</div></div>`,
   setup(){
     const modules=ref([]);const stats=ref([])
     async function load(){const m=await api('/api/modules');modules.value=m;stats.value=[
@@ -84,16 +207,18 @@ const Overview = { components:{ModuleCard},
 }
 
 const ModuleList = { props:['type','title','icon'], components:{ModuleCard},
-  template:`<div><h3 class="mb-4"><i :class="icon+' me-2'"></i>{{title}}</h3>
+  template:`<div><h3 class="mb-4"><i :class="icon+' me-2'"></i>{{title}}
+    <button class="btn btn-sm btn-success float-end" @click="add"><i class="bi-plus-lg"></i> 添加配置</button></h3>
     <ModuleCard v-for="m in modules" :key="m.id" :module="m" @run="run(m)" @toggle="toggle(m)" />
-    <div v-if="!modules.length" class="text-muted p-3">暂无配置</div></div>`,
+    <div v-if="!modules.length" class="text-muted p-3">暂无配置。点击"添加配置"创建第一个。</div></div>`,
   setup(props){
     const modules=ref([])
     async function load(){const all=await api('/api/modules');modules.value=all.filter(m=>m.type===props.type)}
     onMounted(load)
+    function add(){resetForm(props.type);nextTick(()=>new bootstrap.Modal('#addModal').show())}
     async function run(m){await api('/api/modules/'+m.type+'/'+m.id+'/run',{method:'POST'})}
     async function toggle(m){await api('/api/modules/'+m.type+'/'+m.id+'/toggle',{method:'POST'});load()}
-    return {modules,run,toggle}
+    return {modules,add,run,toggle}
   }
 }
 
@@ -109,7 +234,8 @@ const SyncView = { components:{ModuleCard},
         <td><button class="btn btn-sm btn-outline-primary" @click="retry(t.id)"
           :disabled="t.state==='running'||t.state==='succeeded'"><i class="bi-arrow-repeat"></i> 重试</button></td></tr>
     </tbody></table></div>
-    <h5 class="mb-3">同步模块</h5>
+    <h5 class="mb-3">同步模块
+      <button class="btn btn-sm btn-success float-end" @click="add"><i class="bi-plus-lg"></i> 添加配置</button></h5>
     <ModuleCard v-for="m in syncMods" :key="m.id" :module="m" @run="run(m)" @toggle="toggle(m)" />
     <div v-if="!syncMods.length&&!tasks.length" class="text-muted p-3">暂无同步任务</div></div>`,
   setup(){
@@ -117,16 +243,17 @@ const SyncView = { components:{ModuleCard},
     function stateCls(s){return({pending:'bg-secondary',running:'bg-primary',succeeded:'bg-success',failed:'bg-warning text-dark',dead_letter:'bg-danger'}[s]||'bg-secondary')}
     async function load(){const [t,m]=await Promise.all([api('/api/sync/queue'),api('/api/modules')]);tasks.value=t;syncMods.value=m.filter(x=>x.type==='alissync')}
     onMounted(load)
+    function add(){resetForm('alissync');nextTick(()=>new bootstrap.Modal('#addModal').show())}
     async function retry(tid){await api('/api/sync/queue/retry/'+tid,{method:'POST'});load()}
     async function run(m){await api('/api/modules/'+m.type+'/'+m.id+'/run',{method:'POST'});load()}
     async function toggle(m){await api('/api/modules/'+m.type+'/'+m.id+'/toggle',{method:'POST'});load()}
-    return {tasks,syncMods,stateCls,retry,run,toggle}
+    return {tasks,syncMods,stateCls,add,retry,run,toggle}
   }
 }
 
 const SettingsView = {
   template:`<div><h3 class="mb-4"><i class="bi-gear me-2"></i>系统设置</h3>
-    <div class="alert alert-info"><i class="bi-info-circle me-2"></i>编辑配置后保存触发热重载，所有定时任务将自动重建。</div>
+    <div class="alert alert-info"><i class="bi-info-circle me-2"></i>编辑配置后保存触发热重载。</div>
     <div class="mb-3"><label class="form-label">config.yaml</label>
       <textarea v-model="raw" class="form-control font-monospace" rows="30"></textarea></div>
     <button class="btn btn-primary" @click="save" :disabled="saving">
@@ -187,10 +314,10 @@ const app = createApp({
     {path:'/settings',label:'系统设置',icon:'bi-gear'},
     {path:'/logs',label:'日志',icon:'bi-journal-text'}] }),
   mounted(){ api('/api/health').then(d=>{if(d.version)this.version=d.version}).catch(()=>{}) },
-  components:{ModuleCard}
 })
 app.use(router)
 app.mount('#app')
 </script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

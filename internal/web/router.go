@@ -35,6 +35,8 @@ func (s *Server) newRouter() http.Handler {
 		// 配置
 		r.Get("/config", s.handleGetConfig)
 		r.Put("/config", s.handleUpdateConfig)
+		r.Post("/config/module", s.handleAddModule)
+		r.Delete("/config/module/{type}/{id}", s.handleDeleteModule)
 
 		// 模块
 		r.Get("/modules", s.handleListModules)
