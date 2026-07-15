@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoFilm 管理面板</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vue-router@4.5.0/dist/vue-router.global.prod.js"></script>
+</head>
+<body>
+<div id="app" class="d-flex">
+  <nav class="d-flex flex-column flex-shrink-0 p-3 bg-dark text-white vh-100" style="width:220px;overflow-y:auto">
+    <a href="/" class="d-flex align-items-center mb-3 text-white text-decoration-none">
+      <i class="bi-film me-2 fs-4"></i><span class="fs-5">AutoFilm</span>
+    </a>
+    <hr>
+    <ul class="nav nav-pills flex-column mb-auto">
+      <li class="nav-item" v-for="item in navItems" :key="item.path">
+        <router-link :to="item.path" class="nav-link text-white" active-class="active">
+          <i :class="item.icon" class="me-2"></i>{{ item.label }}
+        </router-link>
+      </li>
+    </ul>
+    <hr>
+    <div class="text-white-50 small">v{{ version }}</div>
+  </nav>
+  <main class="flex-grow-1 p-4 bg-light" style="overflow-y:auto;height:100vh">
+    <router-view />
+  </main>
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted, computed, watch } = Vue
+const { createRouter, createWebHistory } = VueRouter
+
+// API 工具
+const api = (url, opts={}) => fetch(url, {headers:{'Content-Type':'application/json'},...opts}).then(r=>r.json())
+
+// ====== 组件 ======
+const ModuleCard = {
+  props:['module'], emits:['run','toggle'],
+  template:`<div class="card mb-3"><div class="card-body">
+    <div class="d-flex justify-content-between align-items-start">
+      <div><h5 class="card-title mb-1">{{module.id}}</h5>
+        <span class="badge" :class="module.enabled?'bg-success':'bg-secondary'">{{module.enabled?'已启用':'已禁用'}}</span>
+        <span class="badge bg-info ms-2">{{module.type}}</span></div>
+      <div class="d-flex gap-2">
+        <button class="btn btn-sm" :class="module.enabled?'btn-warning':'btn-success'" @click="$emit('toggle')">
+          <i :class="module.enabled?'bi-pause':'bi-play'"></i></button>
+        <button class="btn btn-sm btn-primary" @click="$emit('run')" :disabled="!module.enabled">
+          <i class="bi-play-fill"></i> 运行</button></div></div>
+    <div class="mt-2 small text-muted">
+      <div v-if="module.cron">Cron: <code>{{module.cron}}</code></div>
+      <div v-if="nextRun">下次: {{fmt(nextRun)}}</div>
+      <div v-if="lastRun">上次: {{fmt(lastRun)}}</div>
+      <div v-if="module.last_error" class="text-danger">错误: {{module.last_error}}</div></div>
+  </div></div>`,
+  computed:{nextRun(){return this.module.next_run?new Date(this.module.next_run):null},lastRun(){return this.module.last_run?new Date(this.module.last_run):null}},
+  methods:{fmt(d){return d.toLocaleString('zh-CN')}}
+}
+
+// ====== Views ======
+const Overview = { components:{ModuleCard},
+  template:`<div><h3 class="mb-4"><i class="bi-speedometer2 me-2"></i>系统概览</h3>
+    <div class="row mb-4"><div class="col-md-3 mb-2" v-for="s in stats" :key="s.label">
+      <div class="card text-center"><div class="card-body"><h5>{{s.count}}</h5><p class="text-muted mb-0">{{s.label}}</p></div></div></div></div>
+    <h5 class="mb-3">模块列表</h5>
+    <ModuleCard v-for="m in modules" :key="m.id" :module="m" @run="run(m)" @toggle="toggle(m)" />
+    <div v-if="!modules.length" class="text-muted p-3">暂无已配置的模块。请检查 config.yaml 是否包含模块配置。</div></div>`,
+  setup(){
+    const modules=ref([]);const stats=ref([])
+    async function load(){const m=await api('/api/modules');modules.value=m;stats.value=[
+      {label:'Alist2Strm',count:m.filter(x=>x.type==='alist2strm').length},
+      {label:'Ani2Alist',count:m.filter(x=>x.type==='ani2alist').length},
+      {label:'封面生成',count:m.filter(x=>x.type==='libraryposter').length},
+      {label:'Alissync',count:m.filter(x=>x.type==='alissync').length}]}
+    onMounted(load)
+    async function run(m){await api('/api/modules/'+m.type+'/'+m.id+'/run',{method:'POST'});load()}
+    async function toggle(m){await api('/api/modules/'+m.type+'/'+m.id+'/toggle',{method:'POST'});load()}
+    return {modules,stats,run,toggle}
+  }
+}
+
+const ModuleList = { props:['type','title','icon'], components:{ModuleCard},
+  template:`<div><h3 class="mb-4"><i :class="icon+' me-2'"></i>{{title}}</h3>
+    <ModuleCard v-for="m in modules" :key="m.id" :module="m" @run="run(m)" @toggle="toggle(m)" />
+    <div v-if="!modules.length" class="text-muted p-3">暂无配置</div></div>`,
+  setup(props){
+    const modules=ref([])
+    async function load(){const all=await api('/api/modules');modules.value=all.filter(m=>m.type===props.type)}
+    onMounted(load)
+    async function run(m){await api('/api/modules/'+m.type+'/'+m.id+'/run',{method:'POST'})}
+    async function toggle(m){await api('/api/modules/'+m.type+'/'+m.id+'/toggle',{method:'POST'});load()}
+    return {modules,run,toggle}
+  }
+}
+
+const SyncView = { components:{ModuleCard},
+  template:`<div><h3 class="mb-4"><i class="bi-arrow-left-right me-2"></i>同步任务</h3>
+    <div class="table-responsive mb-4"><table class="table table-hover"><thead><tr>
+      <th>源路径</th><th>目标路径</th><th>状态</th><th>次数</th><th>错误</th><th>操作</th></tr></thead>
+      <tbody><tr v-for="t in tasks" :key="t.id">
+        <td class="text-truncate" style="max-width:180px">{{t.src_path}}</td>
+        <td class="text-truncate" style="max-width:180px">{{t.dst_path}}</td>
+        <td><span class="badge" :class="stateCls(t.state)">{{t.state}}</span></td>
+        <td>{{t.attempts}}</td><td class="text-truncate text-danger" style="max-width:180px">{{t.last_error}}</td>
+        <td><button class="btn btn-sm btn-outline-primary" @click="retry(t.id)"
+          :disabled="t.state==='running'||t.state==='succeeded'"><i class="bi-arrow-repeat"></i> 重试</button></td></tr>
+    </tbody></table></div>
+    <h5 class="mb-3">同步模块</h5>
+    <ModuleCard v-for="m in syncMods" :key="m.id" :module="m" @run="run(m)" @toggle="toggle(m)" />
+    <div v-if="!syncMods.length&&!tasks.length" class="text-muted p-3">暂无同步任务</div></div>`,
+  setup(){
+    const tasks=ref([]);const syncMods=ref([])
+    function stateCls(s){return({pending:'bg-secondary',running:'bg-primary',succeeded:'bg-success',failed:'bg-warning text-dark',dead_letter:'bg-danger'}[s]||'bg-secondary')}
+    async function load(){const [t,m]=await Promise.all([api('/api/sync/queue'),api('/api/modules')]);tasks.value=t;syncMods.value=m.filter(x=>x.type==='alissync')}
+    onMounted(load)
+    async function retry(tid){await api('/api/sync/queue/retry/'+tid,{method:'POST'});load()}
+    async function run(m){await api('/api/modules/'+m.type+'/'+m.id+'/run',{method:'POST'});load()}
+    async function toggle(m){await api('/api/modules/'+m.type+'/'+m.id+'/toggle',{method:'POST'});load()}
+    return {tasks,syncMods,stateCls,retry,run,toggle}
+  }
+}
+
+const SettingsView = {
+  template:`<div><h3 class="mb-4"><i class="bi-gear me-2"></i>系统设置</h3>
+    <div class="alert alert-info"><i class="bi-info-circle me-2"></i>编辑配置后保存触发热重载，所有定时任务将自动重建。</div>
+    <div class="mb-3"><label class="form-label">config.yaml</label>
+      <textarea v-model="raw" class="form-control font-monospace" rows="30"></textarea></div>
+    <button class="btn btn-primary" @click="save" :disabled="saving">
+      <i class="bi-save me-2"></i>{{saving?'保存中...':'保存配置'}}</button>
+    <div v-if="msg" class="mt-2 alert" :class="msgType">{{msg}}</div></div>`,
+  setup(){
+    const raw=ref('');const saving=ref(false);const msg=ref('');const msgType=ref('alert-success')
+    function show(text,type){msg.value=text;msgType.value=type;setTimeout(()=>msg.value='',5000)}
+    onMounted(async()=>{const d=await api('/api/config');raw.value=d.raw||''})
+    async function save(){saving.value=true;try{const d=await api('/api/config',{method:'PUT',body:JSON.stringify({raw:raw.value})});d.success?show('配置已保存，定时任务已重建'):show('保存失败: '+(d.error||'未知错误'),'alert-danger')}catch(e){show('保存失败: '+e.message,'alert-danger')}finally{saving.value=false}}
+    return {raw,saving,msg,msgType,save}
+  }
+}
+
+const LogsView = {
+  template:`<div><h3 class="mb-4"><i class="bi-journal-text me-2"></i>日志</h3>
+    <div class="mb-2 d-flex gap-2 align-items-center flex-wrap">
+      <button class="btn btn-sm" :class="streaming?'btn-danger':'btn-success'" @click="toggleStream">
+        <i :class="streaming?'bi-stop':'bi-play'"></i> {{streaming?'停止':'实时'}}</button>
+      <button class="btn btn-sm btn-outline-secondary" @click="load"><i class="bi-arrow-clockwise"></i> 刷新</button>
+      <select v-model="level" class="form-select form-select-sm" style="width:auto" @change="load">
+        <option value="">全部</option><option value="info">INFO</option><option value="warn">WARN</option>
+        <option value="error">ERROR</option><option value="debug">DEBUG</option></select></div>
+    <div class="bg-dark text-light p-3 rounded font-monospace" style="height:70vh;overflow-y:auto;font-size:.8rem">
+      <div v-for="(l,i) in lines" :key="i" style="white-space:pre-wrap">{{l}}</div>
+      <div v-if="!lines.length" class="text-muted">暂无日志</div></div></div>`,
+  setup(){
+    const lines=ref([]);const streaming=ref(false);const level=ref('');let ws=null
+    async function load(){try{const d=await api('/api/logs?lines=500'+(level.value?'&level='+level.value:''));lines.value=d}catch(e){}}
+    function toggleStream(){if(streaming.value){ws&&(ws.close(),ws=null);streaming.value=false}else startStream()}
+    function startStream(){const p=location.protocol==='https:'?'wss:':'ws:';ws=new WebSocket(p+'//'+location.host+'/api/logs/stream');ws.onopen=()=>streaming.value=true;ws.onmessage=e=>{lines.value.push(e.data);if(lines.value.length>1000)lines.value.shift()};ws.onclose=()=>streaming.value=false;ws.onerror=()=>streaming.value=false}
+    onMounted(load);watch(level,load)
+    return {lines,streaming,level,load,toggleStream}
+  }
+}
+
+// ====== 路由 ======
+const routes = [
+  { path:'/', component:Overview },
+  { path:'/alist2strm', component:ModuleList, props:{type:'alist2strm',title:'Alist2Strm 模块',icon:'bi-link-45deg'} },
+  { path:'/ani2alist', component:ModuleList, props:{type:'ani2alist',title:'Ani2Alist 模块',icon:'bi-film'} },
+  { path:'/libraryposter', component:ModuleList, props:{type:'libraryposter',title:'封面生成模块',icon:'bi-image'} },
+  { path:'/sync', component:SyncView },
+  { path:'/settings', component:SettingsView },
+  { path:'/logs', component:LogsView },
+]
+
+const router = createRouter({ history: createWebHistory(), routes })
+
+// ====== App ======
+const app = createApp({
+  data:()=>({ version:'dev', navItems:[
+    {path:'/',label:'概览',icon:'bi-speedometer2'},
+    {path:'/alist2strm',label:'Alist2Strm',icon:'bi-link-45deg'},
+    {path:'/ani2alist',label:'Ani2Alist',icon:'bi-film'},
+    {path:'/libraryposter',label:'封面生成',icon:'bi-image'},
+    {path:'/sync',label:'同步任务',icon:'bi-arrow-left-right'},
+    {path:'/settings',label:'系统设置',icon:'bi-gear'},
+    {path:'/logs',label:'日志',icon:'bi-journal-text'}] }),
+  mounted(){ api('/api/health').then(d=>{if(d.version)this.version=d.version}).catch(()=>{}) },
+  components:{ModuleCard}
+})
+app.use(router)
+app.mount('#app')
+</script>
+</body>
+</html>
