@@ -79,16 +79,61 @@ const Overview = {
   setup(){const ms=ref([]);const stats=ref([]);const load=async()=>{const a=await $api('/api/modules');ms.value=a;stats.value=[{label:'Alist2Strm',c:a.filter(x=>x.type==='alist2strm').length},{label:'Ani2Alist',c:a.filter(x=>x.type==='ani2alist').length},{label:'封面',c:a.filter(x=>x.type==='libraryposter').length},{label:'同步',c:a.filter(x=>x.type==='alissync').length}]};onMounted(load);const run=async x=>{await $post('/api/modules/'+x.type+'/'+x.id+'/run');load()};const toggle=async x=>{await $post('/api/modules/'+x.type+'/'+x.id+'/toggle');load()};return {ms,stats,run,toggle}}
 }
 
-const ModList = (type,title,icon)=>({components:{ModuleCard},
+// 配置管理表单组件（内嵌于模块页）
+const CfgMgr = { props:['type'],
+  template:`<div class="mt-4">
+    <h5 class="mb-2"><i class="bi-gear me-1"></i>{{type==='alissync'?'同步':'模块'}}配置 <button class="btn btn-sm btn-success" @click="edit({})"><i class="bi-plus"></i> 新增</button></h5>
+    <table class="table table-sm table-hover" v-if="list.length">
+      <thead><tr><th>ID</th><th v-if="type!=='alissync'">源目录</th><th v-if="type!=='alissync'">目标目录</th><th>Cron</th><th></th></tr></thead>
+      <tbody><tr v-for="c in list" :key="c.id">
+        <td>{{c.id}}</td><td v-if="type!=='alissync'" class="text-truncate" style="max-width:180px">{{c.source_dir}}</td>
+        <td v-if="type!=='alissync'" class="text-truncate" style="max-width:180px">{{c.target_dir}}</td>
+        <td><code>{{c.cron}}</code></td>
+        <td><button class="btn btn-sm btn-outline-danger py-0" @click="del(c.id)"><i class="bi-trash"></i></button></td></tr>
+      </tbody></table>
+    <p v-else class="text-muted small">暂无配置</p>
+    <div v-if="showForm" class="modal d-block" style="background:rgba(0,0,0,.5)">
+      <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header py-2"><span class="modal-title small">{{form.id?'编辑':'新增'}} {{type}}</span>
+          <button type="button" class="btn-close btn-close-sm" @click="showForm=false"></button></div>
+        <div class="modal-body py-2">
+          <div class="mb-1"><input v-model="form.id" class="form-control form-control-sm" placeholder="ID"></div>
+          <div class="mb-1"><input v-model="form.url" class="form-control form-control-sm" placeholder="http://localhost:5244"></div>
+          <div class="mb-1"><input v-model="form.token" class="form-control form-control-sm" placeholder="Token"></div>
+          <div v-if="type==='alist2strm'" class="row g-1 mb-1"><div class="col"><input v-model="form.source_dir" class="form-control form-control-sm" placeholder="源目录"></div>
+            <div class="col"><input v-model="form.target_dir" class="form-control form-control-sm" placeholder="目标目录"></div></div>
+          <div class="mb-1"><input v-model="form.cron" class="form-control form-control-sm" placeholder="Cron 表达式"></div>
+          <div class="form-check"><input class="form-check-input" type="checkbox" v-model="form.enable" id="fe"><label class="form-check-label small" for="fe">启用</label></div>
+        </div>
+        <div class="modal-footer py-1"><button class="btn btn-sm btn-secondary" @click="showForm=false">取消</button>
+          <button class="btn btn-sm btn-primary" @click="save" :disabled="saving">{{saving?'...':'保存'}}</button></div>
+      </div></div>
+    </div>
+    <div v-if="msg" class="small mt-1" :class="mT">{{msg}}</div>
+  </div>`,
+  setup(props){
+    const list=ref([]);const showForm=ref(false);const saving=ref(false);const msg=ref('');const mT=ref('')
+    const form=reactive({id:'',url:'',token:'',source_dir:'',target_dir:'',cron:'',enable:true})
+    const show=(t,c)=>{msg.value=t;mT.value=c||'text-success';setTimeout(()=>msg.value='',4000)}
+    const load=async()=>{try{const d=await $api('/api/configs/'+(props.type==='alist2strm'?'alist2strm':props.type));list.value=d}catch(e){}}
+    const edit=(c)=>{Object.assign(form,{id:'',url:'',token:'',source_dir:'',target_dir:'',cron:'',enable:true},c);showForm.value=true}
+    const save=async()=>{saving.value=true;try{const b={id:form.id,url:form.url,token:form.token,enable:form.enable,cron:form.cron};if(props.type==='alist2strm'){b.source_dir=form.source_dir;b.target_dir=form.target_dir}const d=await $post('/api/configs/'+props.type,b);if(d.success){showForm.value=false;load();show('已保存')}else show('失败','text-danger')}catch(e){show(e.message,'text-danger')}finally{saving.value=false}}
+    const del=async id=>{if(!confirm('删除 '+id+' ?'))return;try{const r=await fetch('/api/configs/'+props.type+'/'+id,{method:'DELETE'});const d=await r.json();if(d.success)load()}catch(e){}}
+    onMounted(load);return {list,showForm,saving,msg,mT,form,edit,save,del}
+  }
+}
+
+const ModPage = (type,title,icon)=>({components:{ModuleCard,CfgMgr},
   template:`<div><h4><i :class="icon+' me-2'"></i>{{title}}</h4>
     <ModuleCard v-for="m in ms" :key="m.type+m.id" :m="m" @run="run(m)" @toggle="toggle(m)"/>
-    <p v-if="!ms.length" class="text-muted mt-3">暂无</p></div>`,
+    <p v-if="!ms.length" class="text-muted mt-3">暂无模块</p>
+    <CfgMgr :type="type"/> </div>`,
   setup(){const ms=ref([]);const load=async()=>{const a=await $api('/api/modules');ms.value=a.filter(x=>x.type===type)};onMounted(load);const run=async x=>{await $post('/api/modules/'+x.type+'/'+x.id+'/run')};const toggle=async x=>{await $post('/api/modules/'+x.type+'/'+x.id+'/toggle');load()};return {ms,run,toggle}}
 })
 
-const Sync = {components:{ModuleCard},
+const Sync = {components:{ModuleCard,CfgMgr},
   template:`<div><h4><i class="bi-arrow-left-right me-2"></i>同步</h4>
-    <div class="table-responsive mb-3"><table class="table table-sm table-hover"><thead><tr>
+    <div class="table-responsive mb-2"><table class="table table-sm table-hover"><thead><tr>
       <th>源</th><th>目标</th><th>状态</th><th>次数</th><th>错误</th><th></th></tr></thead>
       <tbody><tr v-for="t in tasks" :key="t.id">
         <td class="text-truncate" style="max-width:160px">{{t.src_path}}</td>
@@ -97,7 +142,8 @@ const Sync = {components:{ModuleCard},
         <td>{{t.attempts}}</td><td class="text-danger text-truncate" style="max-width:160px">{{t.last_error}}</td>
         <td><button class="btn btn-sm btn-outline-primary" @click="retry(t.id)" :disabled="t.state==='running'||t.state==='succeeded'">重试</button></td></tr>
     </tbody></table></div>
-    <ModuleCard v-for="m in mods" :key="m.type+m.id" :m="m" @run="run(m)" @toggle="toggle(m)"/></div>`,
+    <ModuleCard v-for="m in mods" :key="m.type+m.id" :m="m" @run="run(m)" @toggle="toggle(m)"/>
+    <CfgMgr type="alissync"/></div>`,
   setup(){const tasks=ref([]);const mods=ref([]);const scls=s=>({pending:'bg-secondary',running:'bg-primary',succeeded:'bg-success',failed:'bg-warning text-dark',dead_letter:'bg-danger'}[s]||'bg-secondary');const load=async()=>{const[a,b]=await Promise.all([$api('/api/sync/queue'),$api('/api/modules')]);tasks.value=a;mods.value=b.filter(x=>x.type==='alissync')};onMounted(load);const retry=async id=>{await $post('/api/sync/queue/retry/'+id);load()};const run=async x=>{await $post('/api/modules/'+x.type+'/'+x.id+'/run')};const toggle=async x=>{await $post('/api/modules/'+x.type+'/'+x.id+'/toggle');load()};return {tasks,mods,scls,retry,run,toggle}}
 }
 
@@ -121,71 +167,16 @@ const Logs = {
   setup(){const lines=ref([]);const streaming=ref(false);const level=ref('');let ws=null;const loadLogs=async()=>{try{const d=await $api('/api/logs?lines=500'+(level.value?'&level='+level.value:''));lines.value=d}catch(e){}};const toggle=()=>{streaming.value?(ws&&(ws.close(),ws=null),streaming.value=false):(ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/api/logs/stream'),ws.onopen=()=>streaming.value=true,ws.onmessage=e=>{lines.value.push(e.data);lines.value.length>1000&&lines.value.shift()},ws.onclose=()=>streaming.value=false,ws.onerror=()=>streaming.value=false)};onMounted(loadLogs);return {lines,streaming,level,loadLogs,toggle}}
 }
 
-const Configs = {
-  template:`<div><h4><i class="bi-database me-2"></i>配置管理</h4>
-    <p class="text-muted small">从数据库管理模块配置，保存后自动重载。当前从 <strong class="text-success">SQLite</strong> 读取。</p>
-    <ul class="nav nav-tabs mb-2">
-      <li class="nav-item"><a class="nav-link" :class="{active:tab==='a2s'}" href="#" @click.prevent="tab='a2s'">Alist2Strm</a></li>
-      <li class="nav-item"><a class="nav-link" :class="{active:tab==='ali'}" href="#" @click.prevent="tab='ali'">Alissync</a></li>
-    </ul>
-    <div v-if="tab==='a2s'">
-      <button class="btn btn-sm btn-success mb-2" @click="edit({})"><i class="bi-plus"></i> 新增</button>
-      <table class="table table-sm table-hover"><thead><tr><th>ID</th><th>源目录</th><th>目标目录</th><th>Cron</th><th></th></tr></thead>
-        <tbody><tr v-for="c in list" :key="c.id">
-          <td>{{c.id}}</td><td class="text-truncate" style="max-width:160px">{{c.source_dir}}</td><td class="text-truncate" style="max-width:160px">{{c.target_dir}}</td>
-          <td><code>{{c.cron}}</code></td>
-          <td><button class="btn btn-sm btn-outline-danger py-0" @click="del('alist2strm',c.id)"><i class="bi-trash"></i></button></td></tr>
-        </tbody></table>
-    </div>
-    <div v-if="tab==='ali'">
-      <button class="btn btn-sm btn-success mb-2" @click="edit({})"><i class="bi-plus"></i> 新增</button>
-      <table class="table table-sm table-hover"><thead><tr><th>ID</th><th>Cron</th><th></th></tr></thead>
-        <tbody><tr v-for="c in list" :key="c.id">
-          <td>{{c.id}}</td><td><code>{{c.cron}}</code></td>
-          <td><button class="btn btn-sm btn-outline-danger py-0" @click="del('alissync',c.id)"><i class="bi-trash"></i></button></td></tr>
-        </tbody></table>
-    </div>
-    <div v-if="showForm" class="modal d-block" style="background:rgba(0,0,0,.5)">
-      <div class="modal-dialog modal-lg"><div class="modal-content">
-        <div class="modal-header"><h5 class="modal-title">{{form.id?'编辑':'新增'}}</h5><button type="button" class="btn-close" @click="showForm=false"></button></div>
-        <div class="modal-body">
-          <div class="row"><div class="col-md-6 mb-2"><label class="form-label">ID</label><input v-model="form.id" class="form-control"></div>
-            <div class="col-md-6 mb-2"><label class="form-label">URL</label><input v-model="form.url" class="form-control" placeholder="http://localhost:5244"></div></div>
-          <div class="mb-2"><label class="form-label">Token</label><input v-model="form.token" class="form-control"></div>
-          <div class="row" v-if="tab==='a2s'"><div class="col-md-6 mb-2"><label class="form-label">源目录</label><input v-model="form.source_dir" class="form-control"></div>
-            <div class="col-md-6 mb-2"><label class="form-label">目标目录</label><input v-model="form.target_dir" class="form-control"></div></div>
-          <div class="mb-2"><label class="form-label">Cron</label><input v-model="form.cron" class="form-control" placeholder="00 00 20 * * *"></div>
-          <div v-if="tab==='ali'" class="mb-2"><label class="form-label">Pairs (JSON)</label><textarea v-model="form.pairs" class="form-control font-monospace" rows="3" placeholder='[{"src":"/src","dst":"/dst","overwrite":"if_newer"}]'></textarea></div>
-          <div class="form-check"><input class="form-check-input" type="checkbox" v-model="form.enable" id="formEn"><label class="form-check-label" for="formEn">启用</label></div>
-        </div>
-        <div class="modal-footer"><button class="btn btn-secondary" @click="showForm=false">取消</button><button class="btn btn-primary" @click="save" :disabled="saving">{{saving?'保存中...':'保存'}}</button></div>
-      </div></div>
-    </div>
-    <div v-if="msg" class="mt-2 alert py-1 small" :class="mT">{{msg}}</div>
-  </div>`,
-  setup(){
-    const tab=ref('a2s');const list=ref([]);const showForm=ref(false);const saving=ref(false);const msg=ref('');const mT=ref('alert-success')
-    const form=reactive({id:'',url:'',token:'',source_dir:'',target_dir:'',cron:'',enable:true,pairs:'[]'})
-    const show=(t,c)=>{msg.value=t;mT.value=c||'alert-success';setTimeout(()=>msg.value='',5000)}
-    const load=async()=>{try{const d=await $api('/api/configs/'+(tab.value==='a2s'?'alist2strm':'alissync'));list.value=d}catch(e){show('加载失败: '+e.message,'alert-danger')}}
-    const edit=(c)=>{Object.assign(form,{id:'',url:'',token:'',source_dir:'',target_dir:'',cron:'',enable:true,pairs:'[]'},c);if(typeof form.pairs==='object')form.pairs=JSON.stringify(form.pairs,null,2);showForm.value=true}
-    const save=async()=>{saving.value=true;try{const b={id:form.id,url:form.url,token:form.token,enable:form.enable,cron:form.cron};if(tab.value==='a2s'){b.source_dir=form.source_dir;b.target_dir=form.target_dir}if(tab.value==='ali'){try{b.pairs=JSON.parse(form.pairs)}catch(e){}}const d=await $post('/api/configs/'+(tab.value==='a2s'?'alist2strm':'alissync'),b);if(d.success){showForm.value=false;load()}else show('保存失败','alert-danger')}catch(e){show(e.message,'alert-danger')}finally{saving.value=false}}
-    const del=async(typ,id)=>{if(!confirm('删除 '+id+' ?'))return;try{const r=await fetch('/api/configs/'+typ+'/'+id,{method:'DELETE'});const d=await r.json();if(d.success)load();else alert(d.error)}catch(e){alert(e.message)}}
-    watch(tab,()=>load())
-    onMounted(load)
-    return {tab,list,showForm,saving,msg,mT,form,edit,save,del}
-  }
-}
+
 
 // ---- 路由 ----
 const routes = [
   {path:'/',component:Overview},
-  {path:'/alist2strm', component:ModList('alist2strm','Alist2Strm','bi-link-45deg')},
-  {path:'/ani2alist', component:ModList('ani2alist','Ani2Alist','bi-film')},
-  {path:'/libraryposter', component:ModList('libraryposter','封面','bi-image')},
+  {path:'/alist2strm', component:ModPage('alist2strm','Alist2Strm','bi-link-45deg')},
+  {path:'/ani2alist', component:ModPage('ani2alist','Ani2Alist','bi-film')},
+  {path:'/libraryposter', component:ModPage('libraryposter','封面','bi-image')},
   {path:'/sync',component:Sync},
   {path:'/settings',component:Settings},
-  {path:'/configs',component:Configs},
   {path:'/logs',component:Logs},
 ]
 
@@ -198,7 +189,6 @@ const app = createApp({components:{Nav},
     {path:'/ani2alist',label:'Ani2Alist',icon:'bi-film'},
     {path:'/libraryposter',label:'封面',icon:'bi-image'},
     {path:'/sync',label:'同步',icon:'bi-arrow-left-right'},
-    {path:'/configs',label:'配置',icon:'bi-database'},
     {path:'/settings',label:'设置',icon:'bi-gear'},
     {path:'/logs',label:'日志',icon:'bi-journal-text'}]})
 })
