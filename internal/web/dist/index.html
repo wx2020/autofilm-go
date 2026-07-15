@@ -6,188 +6,214 @@
 <title>AutoFilm</title>
 <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.css" rel="stylesheet">
-<script src="https://cdn.bootcdn.net/ajax/libs/vue/3.5.13/vue.global.prod.js"></script>
-<script src="https://cdn.bootcdn.net/ajax/libs/vue-router/4.5.0/vue-router.global.prod.js"></script>
-<script>if(typeof Vue==='undefined'){document.title='AutoFilm - 加载失败';document.body.innerHTML='<div style="padding:40px;text-align:center"><h3>依赖加载失败</h3><p>Vue.js 未能从 CDN 加载，请检查网络连接或手动刷新。</p><p>CDN: bootcdn.net</p><button onclick="location.reload()" style="padding:8px 24px">重新加载</button></div>'}</script>
-<style>
-body,html{height:100%;margin:0}
-.sidebar{width:220px;min-width:220px}
-.log-box{background:#212529;color:#f8f9fa;padding:12px;border-radius:6px;font-size:.8rem;height:70vh;overflow-y:auto;font-family:monospace}
-.log-box div{white-space:pre-wrap}
-</style>
 </head>
 <body>
-<div id="app" class="d-flex" style="height:100vh">
-  <nav class="sidebar d-flex flex-column flex-shrink-0 p-3 bg-dark text-white">
-    <a href="/" class="d-flex align-items-center mb-3 text-white text-decoration-none">
-      <i class="bi-film me-2 fs-4"></i><span class="fs-5">AutoFilm</span>
-    </a>
-    <hr>
-    <ul class="nav nav-pills flex-column mb-auto">
-      <li class="nav-item" v-for="item in navItems" :key="item.path">
-        <router-link :to="item.path" class="nav-link text-white" active-class="active">
-          <i :class="item.icon" class="me-2"></i>{{ item.label }}
-        </router-link>
-      </li>
-    </ul>
-    <hr>
-    <div class="text-white-50 small">v{{ version }}</div>
-  </nav>
-  <main class="flex-grow-1 p-4 bg-light" style="overflow-y:auto">
-    <router-view />
-  </main>
+<div id="app" style="display:none">
+  <div class="d-flex" style="height:100vh">
+    <nav class="sidebar d-flex flex-column flex-shrink-0 p-3 bg-dark text-white">
+      <a href="/" class="d-flex align-items-center mb-3 text-white text-decoration-none">
+        <i class="bi-film me-2 fs-4"></i><span class="fs-5">AutoFilm</span>
+      </a><hr>
+      <ul class="nav nav-pills flex-column mb-auto">
+        <li class="nav-item" v-for="item in navItems" :key="item.path">
+          <router-link :to="item.path" class="nav-link text-white" active-class="active">
+            <i :class="item.icon" class="me-2"></i>{{ item.label }}
+          </router-link>
+        </li>
+      </ul><hr>
+      <div class="text-white-50 small" id="ver">v{{ version }}</div>
+    </nav>
+    <main class="flex-grow-1 p-4 bg-light" style="overflow-y:auto">
+      <router-view />
+    </main>
+  </div>
 </div>
 
+<script src="https://cdn.bootcdn.net/ajax/libs/vue/3.5.13/vue.global.prod.js"></script>
+<script src="https://cdn.bootcdn.net/ajax/libs/vue-router/4.5.0/vue-router.global.prod.js"></script>
 <script>
-const { createApp, ref, reactive, onMounted, watch } = Vue
-const { createRouter, createWebHistory } = VueRouter
-const api = u=>fetch(u,{headers:{'Content-Type':'application/json'}}).then(r=>r.json())
-const apiPost = (u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):void 0}).then(r=>r.json())
+try {
+if(typeof Vue === 'undefined') {
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('app').innerHTML = '<div class="p-5 text-center"><h3 class="text-danger">加载失败</h3><p>Vue.js 未加载，请检查网络或手动刷新。</p><button class="btn btn-primary" onclick="location.reload()">刷新</button></div>';
+  throw new Error('Vue not loaded');
+}
 
-const ModuleCard = { props:['module'], emits:['run','toggle'],
-  template:`<div class="card mb-3"><div class="card-body">
+const { createApp, ref, reactive, onMounted, watch, nextTick } = Vue
+const { createRouter, createWebHistory } = VueRouter
+const $api = u => fetch(u,{headers:{'Content-Type':'application/json'}}).then(r=>r.json())
+const $post = (u,b) => fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):void 0}).then(r=>r.json())
+
+// ---- 组件 ----
+const ModuleCard = { props:['m'], emits:['run','toggle'],
+  template:`<div class="card mb-2"><div class="card-body py-2">
     <div class="d-flex justify-content-between align-items-start">
-      <div><h5 class="card-title mb-1">{{module.id}}</h5>
-        <span class="badge" :class="module.enabled?'bg-success':'bg-secondary'">{{module.enabled?'已启用':'已禁用'}}</span>
-        <span class="badge bg-info ms-2">{{module.type}}</span></div>
-      <div class="d-flex gap-2">
-        <button class="btn btn-sm" :class="module.enabled?'btn-warning':'btn-success'" @click="$emit('toggle')"><i :class="module.enabled?'bi-pause':'bi-play'"></i></button>
-        <button class="btn btn-sm btn-primary" @click="$emit('run')" :disabled="!module.enabled"><i class="bi-play-fill"></i> 运行</button></div></div>
-    <div class="mt-2 small text-muted">
-      <div v-if="module.cron">Cron: <code>{{module.cron}}</code></div>
-      <div v-if="module.next_run">下次: {{new Date(module.next_run).toLocaleString('zh-CN')}}</div>
-      <div v-if="module.last_run">上次: {{new Date(module.last_run).toLocaleString('zh-CN')}}</div>
-      <div v-if="module.last_error" class="text-danger">错误: {{module.last_error}}</div></div>
+      <div><h6 class="mb-0">{{m.id}}</h6>
+        <span class="badge" :class="m.enabled?'bg-success':'bg-secondary'">{{m.enabled?'已启用':'已禁用'}}</span>
+        <span class="badge bg-info ms-1">{{m.type}}</span></div>
+      <div class="d-flex gap-1">
+        <button class="btn btn-sm" :class="m.enabled?'btn-warning':'btn-success'" @click="$emit('toggle')"><i :class="m.enabled?'bi-pause':'bi-play'"></i></button>
+        <button class="btn btn-sm btn-primary" @click="$emit('run')" :disabled="!m.enabled">运行</button></div></div>
+    <div class="mt-1 small text-muted">
+      <span v-if="m.cron">Cron <code>{{m.cron}}</code></span>
+      <span v-if="m.next_run" class="ms-2">下次 {{new Date(m.next_run).toLocaleString('zh-CN')}}</span>
+      <span v-if="m.last_error" class="ms-2 text-danger">{{m.last_error}}</span></div>
   </div></div>` }
 
-const Overview = { components:{ModuleCard},
-  template:`<div><h3 class="mb-3"><i class="bi-speedometer2 me-2"></i>概览</h3>
+const Nav = {props:['items'], template:`<ul class="nav nav-pills flex-column mb-auto">
+  <li class="nav-item" v-for="item in items" :key="item.path">
+    <router-link :to="item.path" class="nav-link text-white" active-class="active">
+      <i :class="item.icon" class="me-2"></i>{{ item.label }}
+    </router-link>
+  </li>
+</ul>`}
+
+// ---- Views ----
+const Overview = {
+  template:`<div><h4><i class="bi-speedometer2 me-2"></i>概览</h4>
     <div class="row mb-3"><div class="col-md-3 mb-2" v-for="s in stats" :key="s.label">
-      <div class="card text-center"><div class="card-body"><h5>{{s.count}}</h5><p class="text-muted mb-0">{{s.label}}</p></div></div></div></div>
-    <h5 class="mb-2">模块</h5><ModuleCard v-for="m in modules" :key="m.id" :module="m" @run="doRun(m)" @toggle="doToggle(m)"/>
-    <p v-if="!modules.length" class="text-muted mt-3">暂无模块配置，请检查 config.yaml</p></div>`,
-  setup(){const m=ref([]);const s=ref([]);async function l(){const a=await api('/api/modules');m.value=a;s.value=[{label:'Alist2Strm',count:a.filter(x=>x.type==='alist2strm').length},{label:'Ani2Alist',count:a.filter(x=>x.type==='ani2alist').length},{label:'封面',count:a.filter(x=>x.type==='libraryposter').length},{label:'同步',count:a.filter(x=>x.type==='alissync').length}]};onMounted(l);async function r(x){await apiPost('/api/modules/'+x.type+'/'+x.id+'/run');l()};async function t(x){await apiPost('/api/modules/'+x.type+'/'+x.id+'/toggle');l()};return {modules:m,stats:s,doRun:r,doToggle:t}} }
+      <div class="card text-center"><div class="card-body"><h5>{{s.c}}</h5><p class="text-muted mb-0">{{s.label}}</p></div></div></div></div>
+    <ModuleCard v-for="m in ms" :key="m.type+m.id" :m="m" @run="run(m)" @toggle="toggle(m)"/>
+    <p v-if="!ms.length" class="text-muted mt-3">暂无模块</p></div>`,
+  components:{ModuleCard},
+  setup(){const ms=ref([]);const stats=ref([]);const load=async()=>{const a=await $api('/api/modules');ms.value=a;stats.value=[{label:'Alist2Strm',c:a.filter(x=>x.type==='alist2strm').length},{label:'Ani2Alist',c:a.filter(x=>x.type==='ani2alist').length},{label:'封面',c:a.filter(x=>x.type==='libraryposter').length},{label:'同步',c:a.filter(x=>x.type==='alissync').length}]};onMounted(load);const run=async x=>{await $post('/api/modules/'+x.type+'/'+x.id+'/run');load()};const toggle=async x=>{await $post('/api/modules/'+x.type+'/'+x.id+'/toggle');load()};return {ms,stats,run,toggle}}
+}
 
-const makeListView = (type,title,icon)=>({ components:{ModuleCard},
-  template:`<div><h3 class="mb-3"><i :class="icon+' me-2'"></i>{{title}}</h3>
-    <ModuleCard v-for="m in modules" :key="m.id" :module="m" @run="doRun(m)" @toggle="doToggle(m)"/>
-    <p v-if="!modules.length" class="text-muted mt-3">暂无配置</p></div>`,
-  setup(){const m=ref([]);async function l(){const a=await api('/api/modules');m.value=a.filter(x=>x.type===type)};onMounted(l);async function r(x){await apiPost('/api/modules/'+x.type+'/'+x.id+'/run')};async function t(x){await apiPost('/api/modules/'+x.type+'/'+x.id+'/toggle');l()};return {modules:m,doRun:r,doToggle:t}} })
+const ModList = (type,title,icon)=>({components:{ModuleCard},
+  template:`<div><h4><i :class="icon+' me-2'"></i>{{title}}</h4>
+    <ModuleCard v-for="m in ms" :key="m.type+m.id" :m="m" @run="run(m)" @toggle="toggle(m)"/>
+    <p v-if="!ms.length" class="text-muted mt-3">暂无</p></div>`,
+  setup(){const ms=ref([]);const load=async()=>{const a=await $api('/api/modules');ms.value=a.filter(x=>x.type===type)};onMounted(load);const run=async x=>{await $post('/api/modules/'+x.type+'/'+x.id+'/run')};const toggle=async x=>{await $post('/api/modules/'+x.type+'/'+x.id+'/toggle');load()};return {ms,run,toggle}}
+})
 
-const SyncView = { components:{ModuleCard},
-  template:`<div><h3 class="mb-3"><i class="bi-arrow-left-right me-2"></i>同步任务</h3>
-    <div class="table-responsive mb-3"><table class="table table-hover"><thead><tr>
-      <th>源路径</th><th>目标路径</th><th>状态</th><th>次数</th><th>错误</th><th></th></tr></thead>
+const Sync = {components:{ModuleCard},
+  template:`<div><h4><i class="bi-arrow-left-right me-2"></i>同步</h4>
+    <div class="table-responsive mb-3"><table class="table table-sm table-hover"><thead><tr>
+      <th>源</th><th>目标</th><th>状态</th><th>次数</th><th>错误</th><th></th></tr></thead>
       <tbody><tr v-for="t in tasks" :key="t.id">
         <td class="text-truncate" style="max-width:160px">{{t.src_path}}</td>
         <td class="text-truncate" style="max-width:160px">{{t.dst_path}}</td>
-        <td><span class="badge" :class="cls(t.state)">{{t.state}}</span></td>
+        <td><span class="badge" :class="scls(t.state)">{{t.state}}</span></td>
         <td>{{t.attempts}}</td><td class="text-danger text-truncate" style="max-width:160px">{{t.last_error}}</td>
-        <td><button class="btn btn-sm btn-outline-primary" @click="retry(t.id)" :disabled="t.state==='running'||t.state==='succeeded'"><i class="bi-arrow-repeat"></i></button></td></tr>
+        <td><button class="btn btn-sm btn-outline-primary" @click="retry(t.id)" :disabled="t.state==='running'||t.state==='succeeded'">重试</button></td></tr>
     </tbody></table></div>
-    <h5 class="mb-2">同步模块</h5><ModuleCard v-for="m in syncMods" :key="m.id" :module="m" @run="doRun(m)" @toggle="doToggle(m)"/></div>`,
-  setup(){const t=ref([]);const s=ref([]);function cls(s){return{pending:'bg-secondary',running:'bg-primary',succeeded:'bg-success',failed:'bg-warning text-dark',dead_letter:'bg-danger'}[s]||'bg-secondary'};async function l(){const [a,b]=await Promise.all([api('/api/sync/queue'),api('/api/modules')]);t.value=a;s.value=b.filter(x=>x.type==='alissync')};onMounted(l);async function r(id){await apiPost('/api/sync/queue/retry/'+id);l()};async function dr(x){await apiPost('/api/modules/'+x.type+'/'+x.id+'/run')};async function dt(x){await apiPost('/api/modules/'+x.type+'/'+x.id+'/toggle');l()};return {tasks:t,syncMods:s,cls,retry:r,doRun:dr,doToggle:dt}} }
+    <ModuleCard v-for="m in mods" :key="m.type+m.id" :m="m" @run="run(m)" @toggle="toggle(m)"/></div>`,
+  setup(){const tasks=ref([]);const mods=ref([]);const scls=s=>({pending:'bg-secondary',running:'bg-primary',succeeded:'bg-success',failed:'bg-warning text-dark',dead_letter:'bg-danger'}[s]||'bg-secondary');const load=async()=>{const[a,b]=await Promise.all([$api('/api/sync/queue'),$api('/api/modules')]);tasks.value=a;mods.value=b.filter(x=>x.type==='alissync')};onMounted(load);const retry=async id=>{await $post('/api/sync/queue/retry/'+id);load()};const run=async x=>{await $post('/api/modules/'+x.type+'/'+x.id+'/run')};const toggle=async x=>{await $post('/api/modules/'+x.type+'/'+x.id+'/toggle');load()};return {tasks,mods,scls,retry,run,toggle}}
+}
 
-const ConfigsView = {
-  template:`<div><h3 class="mb-3"><i class="bi-database me-2"></i>配置管理</h3>
-    <p class="text-muted">从数据库管理模块配置，保存后自动重载。当前数据源：<strong id="cfgSrc" class="text-success">数据库</strong></p>
-    <ul class="nav nav-tabs mb-3" id="cfgTabs">
-      <li class="nav-item"><a class="nav-link active" href="#" @click.prevent="tab='alist2strm'">Alist2Strm</a></li>
-      <li class="nav-item"><a class="nav-link" href="#" @click.prevent="tab='ali2alist'">Ani2Alist</a></li>
-      <li class="nav-item"><a class="nav-link" href="#" @click.prevent="tab='alissync'">Alissync</a></li>
+const Settings = {
+  template:`<div><h4><i class="bi-gear me-2"></i>设置</h4>
+    <div class="alert alert-info py-2"><i class="bi-info-circle me-2"></i>保存后触发热重载，cron 自动重建。</div>
+    <textarea v-model="raw" class="form-control font-monospace mb-2" rows="20"></textarea>
+    <button class="btn btn-primary" @click="save" :disabled="saving"><i class="bi-save me-2"></i>{{saving?'保存中...':'保存'}}</button>
+    <div v-if="msg" class="mt-2 alert py-2" :class="mT">{{msg}}</div></div>`,
+  setup(){const raw=ref('');const saving=ref(false);const msg=ref('');const mT=ref('alert-success');const show=(t,c)=>{msg.value=t;mT.value=c;setTimeout(()=>msg.value='',5000)};onMounted(async()=>{const d=await $api('/api/config');raw.value=d.raw||''});const save=async()=>{saving.value=true;try{const d=await $post('/api/config',{raw:raw.value});d.success?show('已保存，任务已重建'):show(d.error||'失败','alert-danger')}catch(e){show(e.message,'alert-danger')}finally{saving.value=false}};return {raw,saving,msg,mT,save}}
+}
+
+const Logs = {
+  template:`<div><h4><i class="bi-journal-text me-2"></i>日志</h4>
+    <div class="mb-2 d-flex gap-2 align-items-center flex-wrap">
+      <button class="btn btn-sm" :class="streaming?'btn-danger':'btn-success'" @click="toggle"><i :class="streaming?'bi-stop':'bi-play'"></i> {{streaming?'停止':'实时'}}</button>
+      <button class="btn btn-sm btn-outline-secondary" @click="loadLogs"><i class="bi-arrow-clockwise"></i> 刷新</button>
+      <select v-model="level" class="form-select form-select-sm" style="width:auto" @change="loadLogs">
+        <option value="">全部</option><option>info</option><option>warn</option><option>error</option><option>debug</option></select></div>
+    <div class="log-box"><div v-for="(l,i) in lines" :key="i">{{l}}</div><div v-if="!lines.length" class="text-muted">暂无</div></div></div>`,
+  setup(){const lines=ref([]);const streaming=ref(false);const level=ref('');let ws=null;const loadLogs=async()=>{try{const d=await $api('/api/logs?lines=500'+(level.value?'&level='+level.value:''));lines.value=d}catch(e){}};const toggle=()=>{streaming.value?(ws&&(ws.close(),ws=null),streaming.value=false):(ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/api/logs/stream'),ws.onopen=()=>streaming.value=true,ws.onmessage=e=>{lines.value.push(e.data);lines.value.length>1000&&lines.value.shift()},ws.onclose=()=>streaming.value=false,ws.onerror=()=>streaming.value=false)};onMounted(loadLogs);return {lines,streaming,level,loadLogs,toggle}}
+}
+
+const Configs = {
+  template:`<div><h4><i class="bi-database me-2"></i>配置管理</h4>
+    <p class="text-muted small">从数据库管理模块配置，保存后自动重载。当前从 <strong class="text-success">SQLite</strong> 读取。</p>
+    <ul class="nav nav-tabs mb-2">
+      <li class="nav-item"><a class="nav-link" :class="{active:tab==='a2s'}" href="#" @click.prevent="tab='a2s'">Alist2Strm</a></li>
+      <li class="nav-item"><a class="nav-link" :class="{active:tab==='ali'}" href="#" @click.prevent="tab='ali'">Alissync</a></li>
     </ul>
-    <div v-if="tab==='alist2strm'">
-      <button class="btn btn-sm btn-success mb-2" @click="editItem={}"><i class="bi-plus"></i> 新增</button>
-      <table class="table table-hover"><thead><tr><th>ID</th><th>源目录</th><th>目标目录</th><th>Cron</th><th>启用</th><th></th></tr></thead>
-        <tbody><tr v-for="c in a2sList" :key="c.id">
-          <td>{{c.id}}</td><td class="text-truncate" style="max-width:200px">{{c.source_dir}}</td><td class="text-truncate" style="max-width:200px">{{c.target_dir}}</td>
-          <td><code>{{c.cron}}</code></td><td><span class="badge" :class="c.enable?'bg-success':'bg-secondary'">{{c.enable?'是':'否'}}</span></td>
-          <td><button class="btn btn-sm btn-outline-danger" @click="del('alist2strm',c.id)"><i class="bi-trash"></i></button></td></tr>
+    <div v-if="tab==='a2s'">
+      <button class="btn btn-sm btn-success mb-2" @click="edit({})"><i class="bi-plus"></i> 新增</button>
+      <table class="table table-sm table-hover"><thead><tr><th>ID</th><th>源目录</th><th>目标目录</th><th>Cron</th><th></th></tr></thead>
+        <tbody><tr v-for="c in list" :key="c.id">
+          <td>{{c.id}}</td><td class="text-truncate" style="max-width:160px">{{c.source_dir}}</td><td class="text-truncate" style="max-width:160px">{{c.target_dir}}</td>
+          <td><code>{{c.cron}}</code></td>
+          <td><button class="btn btn-sm btn-outline-danger py-0" @click="del('alist2strm',c.id)"><i class="bi-trash"></i></button></td></tr>
         </tbody></table>
     </div>
-    <div v-if="tab==='alissync'">
-      <button class="btn btn-sm btn-success mb-2" @click="editItem={}"><i class="bi-plus"></i> 新增</button>
-      <table class="table table-hover"><thead><tr><th>ID</th><th>Cron</th><th>启用</th><th></th></tr></thead>
-        <tbody><tr v-for="c in alisyncList" :key="c.id">
-          <td>{{c.id}}</td><td><code>{{c.cron}}</code></td><td><span class="badge" :class="c.enable?'bg-success':'bg-secondary'">{{c.enable?'是':'否'}}</span></td>
-          <td><button class="btn btn-sm btn-outline-danger" @click="del('alissync',c.id)"><i class="bi-trash"></i></button></td></tr>
+    <div v-if="tab==='ali'">
+      <button class="btn btn-sm btn-success mb-2" @click="edit({})"><i class="bi-plus"></i> 新增</button>
+      <table class="table table-sm table-hover"><thead><tr><th>ID</th><th>Cron</th><th></th></tr></thead>
+        <tbody><tr v-for="c in list" :key="c.id">
+          <td>{{c.id}}</td><td><code>{{c.cron}}</code></td>
+          <td><button class="btn btn-sm btn-outline-danger py-0" @click="del('alissync',c.id)"><i class="bi-trash"></i></button></td></tr>
         </tbody></table>
     </div>
-    <!-- 编辑/新增弹窗 -->
-    <div v-if="editItem!==null" class="modal d-block" style="background:rgba(0,0,0,.5)">
-      <div class="modal-dialog"><div class="modal-content">
-        <div class="modal-header"><h5 class="modal-title">{{editItem.id?'编辑':'新增'}} {{tab}} 配置</h5>
-          <button type="button" class="btn-close" @click="editItem=null"></button></div>
+    <div v-if="showForm" class="modal d-block" style="background:rgba(0,0,0,.5)">
+      <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">{{form.id?'编辑':'新增'}}</h5><button type="button" class="btn-close" @click="showForm=false"></button></div>
         <div class="modal-body">
-          <div class="mb-2"><label class="form-label">ID</label><input v-model="f.id" class="form-control" placeholder="唯一标识"></div>
-          <div class="mb-2"><label class="form-label">URL</label><input v-model="f.url" class="form-control" placeholder="http://localhost:5244"></div>
-          <div class="mb-2"><label class="form-label">Token</label><input v-model="f.token" class="form-control" placeholder="Alist 永久令牌"></div>
-          <template v-if="tab==='alist2strm'">
-            <div class="mb-2"><label class="form-label">源目录</label><input v-model="f.source_dir" class="form-control"></div>
-            <div class="mb-2"><label class="form-label">目标目录</label><input v-model="f.target_dir" class="form-control"></div>
-            <div class="mb-2"><label class="form-label">Cron</label><input v-model="f.cron" class="form-control" placeholder="00 00 20 * * *"></div>
-            <div class="form-check mb-2"><input type="checkbox" v-model="f.enable" class="form-check-input" id="fe"><label class="form-check-label" for="fe">启用</label></div>
-          </template>
-          <template v-if="tab==='alissync'">
-            <div class="mb-2"><label class="form-label">Cron</label><input v-model="f.cron" class="form-control" placeholder="0 */2 * * *"></div>
-            <div class="mb-2"><label class="form-label">Pairs (JSON)</label><textarea v-model="f.pairs" class="form-control font-monospace" rows="3" placeholder='[{"src":"/src","dst":"/dst","overwrite":"if_newer"}]'></textarea></div>
-            <div class="mb-2"><label class="form-label">Retry (JSON)</label><textarea v-model="f.retry" class="form-control font-monospace" rows="2" placeholder='{"max_attempts":10,"backoff":"expo","jitter":0.2}'></textarea></div>
-            <div class="form-check mb-2"><input type="checkbox" v-model="f.enable" class="form-check-input" id="fe2"><label class="form-check-label" for="fe2">启用</label></div>
-          </template>
+          <div class="row"><div class="col-md-6 mb-2"><label class="form-label">ID</label><input v-model="form.id" class="form-control"></div>
+            <div class="col-md-6 mb-2"><label class="form-label">URL</label><input v-model="form.url" class="form-control" placeholder="http://localhost:5244"></div></div>
+          <div class="mb-2"><label class="form-label">Token</label><input v-model="form.token" class="form-control"></div>
+          <div class="row" v-if="tab==='a2s'"><div class="col-md-6 mb-2"><label class="form-label">源目录</label><input v-model="form.source_dir" class="form-control"></div>
+            <div class="col-md-6 mb-2"><label class="form-label">目标目录</label><input v-model="form.target_dir" class="form-control"></div></div>
+          <div class="mb-2"><label class="form-label">Cron</label><input v-model="form.cron" class="form-control" placeholder="00 00 20 * * *"></div>
+          <div v-if="tab==='ali'" class="mb-2"><label class="form-label">Pairs (JSON)</label><textarea v-model="form.pairs" class="form-control font-monospace" rows="3" placeholder='[{"src":"/src","dst":"/dst","overwrite":"if_newer"}]'></textarea></div>
+          <div class="form-check"><input class="form-check-input" type="checkbox" v-model="form.enable" id="formEn"><label class="form-check-label" for="formEn">启用</label></div>
         </div>
-        <div class="modal-footer">
-          <button class="btn btn-secondary" @click="editItem=null">取消</button>
-          <button class="btn btn-primary" @click="saveCfg" :disabled="saving">{{saving?'保存中...':'保存'}}</button>
-        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" @click="showForm=false">取消</button><button class="btn btn-primary" @click="save" :disabled="saving">{{saving?'保存中...':'保存'}}</button></div>
       </div></div>
     </div>
+    <div v-if="msg" class="mt-2 alert py-1 small" :class="mT">{{msg}}</div>
   </div>`,
   setup(){
-    const tab=ref('alist2strm');const a2sList=ref([]);const alisyncList=ref([]);const editItem=ref(null);const saving=ref(false)
-    const f=reactive({id:'',url:'',token:'',source_dir:'',target_dir:'',cron:'',enable:true,pairs:'',retry:''})
-    async function load(){try{const [a,b]=await Promise.all([api('/api/configs/alist2strm'),api('/api/configs/alissync')]);a2sList.value=a;alisyncList.value=b}catch(e){}}
+    const tab=ref('a2s');const list=ref([]);const showForm=ref(false);const saving=ref(false);const msg=ref('');const mT=ref('alert-success')
+    const form=reactive({id:'',url:'',token:'',source_dir:'',target_dir:'',cron:'',enable:true,pairs:'[]'})
+    const show=(t,c)=>{msg.value=t;mT.value=c||'alert-success';setTimeout(()=>msg.value='',5000)}
+    const load=async()=>{try{const d=await $api('/api/configs/'+(tab.value==='a2s'?'alist2strm':'alissync'));list.value=d}catch(e){show('加载失败: '+e.message,'alert-danger')}}
+    const edit=(c)=>{Object.assign(form,{id:'',url:'',token:'',source_dir:'',target_dir:'',cron:'',enable:true,pairs:'[]'},c);if(typeof form.pairs==='object')form.pairs=JSON.stringify(form.pairs,null,2);showForm.value=true}
+    const save=async()=>{saving.value=true;try{const b={id:form.id,url:form.url,token:form.token,enable:form.enable,cron:form.cron};if(tab.value==='a2s'){b.source_dir=form.source_dir;b.target_dir=form.target_dir}if(tab.value==='ali'){try{b.pairs=JSON.parse(form.pairs)}catch(e){}}const d=await $post('/api/configs/'+(tab.value==='a2s'?'alist2strm':'alissync'),b);if(d.success){showForm.value=false;load()}else show('保存失败','alert-danger')}catch(e){show(e.message,'alert-danger')}finally{saving.value=false}}
+    const del=async(typ,id)=>{if(!confirm('删除 '+id+' ?'))return;try{const r=await fetch('/api/configs/'+typ+'/'+id,{method:'DELETE'});const d=await r.json();if(d.success)load();else alert(d.error)}catch(e){alert(e.message)}}
+    watch(tab,()=>load())
     onMounted(load)
-    watch(editItem,(v)=>{if(v===null)return;Object.assign(f,{id:'',url:'',token:'',source_dir:'',target_dir:'',cron:'',enable:true,pairs:'',retry:''},v);if(typeof f.pairs==='object')f.pairs=JSON.stringify(f.pairs,null,2);if(typeof f.retry==='object')f.retry=JSON.stringify(f.retry,null,2);watch(()=>f.enable,()=>{})})
-    async function saveCfg(){saving.value=true;try{const body={id:f.id,url:f.url,token:f.token,enable:f.enable,cron:f.cron};if(tab.value==='alist2strm'){body.source_dir=f.source_dir;body.target_dir=f.target_dir}if(tab.value==='alissync'){try{body.pairs=JSON.parse(f.pairs)}catch(e){}try{body.retry=JSON.parse(f.retry)}catch(e){}}const d=await apiPost('/api/configs/'+tab.value,body);if(d.success){editItem.value=null;load()}else alert(d.error||'保存失败')}catch(e){alert(e.message)}finally{saving.value=false}}
-    async function del(typ,id){if(!confirm('确认删除 '+id+' ?'))return;try{const r=await fetch('/api/configs/'+typ+'/'+id,{method:'DELETE'});const d=await r.json();if(d.success)load();else alert(d.error)}catch(e){alert(e.message)}}
-    return {tab,a2sList,alisyncList,editItem,saving,f,del,saveCfg}
+    return {tab,list,showForm,saving,msg,mT,form,edit,save,del}
   }
 }
 
-const LogsView = { template:`<div><h3 class="mb-3"><i class="bi-journal-text me-2"></i>日志</h3>
-    <div class="mb-2 d-flex gap-2 align-items-center flex-wrap">
-      <button class="btn btn-sm" :class="streaming?'btn-danger':'btn-success'" @click="toggle"><i :class="streaming?'bi-stop':'bi-play'"></i> {{streaming?'停止':'实时'}}</button>
-      <button class="btn btn-sm btn-outline-secondary" @click="load"><i class="bi-arrow-clockwise"></i> 刷新</button>
-      <select v-model="level" class="form-select form-select-sm" style="width:auto" @change="load">
-        <option value="">全部</option><option>info</option><option>warn</option><option>error</option><option>debug</option></select></div>
-    <div class="log-box"><div v-for="(l,i) in lines" :key="i">{{l}}</div><div v-if="!lines.length" class="text-muted">暂无日志</div></div></div>`,
-  setup(){const lines=ref([]);const streaming=ref(false);const level=ref('');let ws=null;async function load(){try{const d=await api('/api/logs?lines=500'+(level.value?'&level='+level.value:''));lines.value=d}catch(e){}};function toggle(){streaming.value?(ws&&(ws.close(),ws=null),streaming.value=false):start()};function start(){const p=location.protocol==='https:'?'wss:':'ws:';ws=new WebSocket(p+'//'+location.host+'/api/logs/stream');ws.onopen=()=>streaming.value=true;ws.onmessage=e=>{lines.value.push(e.data);lines.value.length>1000&&lines.value.shift()};ws.onclose=()=>streaming.value=false;ws.onerror=()=>streaming.value=false};onMounted(load);return {lines,streaming,level,load,toggle}} }
-
+// ---- 路由 ----
 const routes = [
   {path:'/',component:Overview},
-  {path:'/alist2strm',component:makeListView('alist2strm','Alist2Strm','bi-link-45deg')},
-  {path:'/ani2alist',component:makeListView('ani2alist','Ani2Alist','bi-film')},
-  {path:'/libraryposter',component:makeListView('libraryposter','封面生成','bi-image')},
-  {path:'/sync',component:SyncView},
-  {path:'/settings',component:SettingsView},
-  {path:'/configs',component:ConfigsView},
-  {path:'/logs',component:LogsView},
+  {path:'/alist2strm', component:ModList('alist2strm','Alist2Strm','bi-link-45deg')},
+  {path:'/ani2alist', component:ModList('ani2alist','Ani2Alist','bi-film')},
+  {path:'/libraryposter', component:ModList('libraryposter','封面','bi-image')},
+  {path:'/sync',component:Sync},
+  {path:'/settings',component:Settings},
+  {path:'/configs',component:Configs},
+  {path:'/logs',component:Logs},
 ]
 
+// ---- 启动 ----
 const router = createRouter({history:createWebHistory(),routes})
-const app = createApp({data:()=>({version:'dev',navItems:[
-  {path:'/',label:'概览',icon:'bi-speedometer2'},
-  {path:'/alist2strm',label:'Alist2Strm',icon:'bi-link-45deg'},
-  {path:'/ani2alist',label:'Ani2Alist',icon:'bi-film'},
-  {path:'/libraryposter',label:'封面生成',icon:'bi-image'},
-  {path:'/sync',label:'同步任务',icon:'bi-arrow-left-right'},
-  {path:'/settings',label:'系统设置',icon:'bi-gear'},
-  {path:'/configs',label:'配置管理',icon:'bi-database'},
-  {path:'/logs',label:'日志',icon:'bi-journal-text'}]})
+const app = createApp({components:{Nav},
+  data:()=>({version:'dev',navItems:[
+    {path:'/',label:'概览',icon:'bi-speedometer2'},
+    {path:'/alist2strm',label:'Alist2Strm',icon:'bi-link-45deg'},
+    {path:'/ani2alist',label:'Ani2Alist',icon:'bi-film'},
+    {path:'/libraryposter',label:'封面',icon:'bi-image'},
+    {path:'/sync',label:'同步',icon:'bi-arrow-left-right'},
+    {path:'/configs',label:'配置',icon:'bi-database'},
+    {path:'/settings',label:'设置',icon:'bi-gear'},
+    {path:'/logs',label:'日志',icon:'bi-journal-text'}]})
 })
 app.use(router)
 app.mount('#app')
-fetch('/api/health').then(r=>r.json()).then(d=>{if(d.version)document.querySelector('.text-white-50').textContent='v'+d.version}).catch(()=>{})
+document.getElementById('app').style.display = ''
+
+// 版本号
+fetch('/api/health').then(r=>r.json()).then(d=>{if(d.version)document.getElementById('ver').textContent='v'+d.version}).catch(()=>{})
+
+} catch(e) {
+  document.getElementById('app').style.display = 'block'
+  document.getElementById('app').innerHTML = '<div class="p-5 text-center"><h4 class="text-danger">启动失败</h4><p class="text-muted">'+e.message+'</p><pre class="text-start bg-light p-3 mt-3" style="max-width:600px;margin:auto;overflow:auto">'+e.stack+'</pre></div>'
+  console.error(e)
+}
 </script>
 </body>
 </html>
