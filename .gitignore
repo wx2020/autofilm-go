@@ -29,7 +29,8 @@ vendor/
 
 # Build output
 bin/
-dist/
+/dist/
+!internal/web/dist/
 
 # Config files (users should provide their own)
 config/*.yaml

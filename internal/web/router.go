@@ -2,6 +2,9 @@ package web
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -15,6 +18,9 @@ type WebConfig struct {
 	Token   string `json:"token,omitempty"`
 }
 
+// WebRoot 前端静态文件目录（可由 main 注入）
+var WebRoot = "internal/web/dist"
+
 // newRouter 创建路由
 func (s *Server) newRouter() http.Handler {
 	r := chi.NewRouter()
@@ -26,37 +32,38 @@ func (s *Server) newRouter() http.Handler {
 
 	// API 路由
 	r.Route("/api", func(r chi.Router) {
-		// 健康检查
 		r.Get("/health", s.handleHealth)
-
-		// Alist 连通性测试
 		r.Get("/alist/test", s.handleAlistTest)
-
-		// 配置
 		r.Get("/config", s.handleGetConfig)
 		r.Put("/config", s.handleUpdateConfig)
-		r.Post("/config/module", s.handleAddModule)
-		r.Delete("/config/module/{type}/{id}", s.handleDeleteModule)
-
-		// 模块
 		r.Get("/modules", s.handleListModules)
 		r.Post("/modules/{type}/{id}/run", s.handleRunModule)
 		r.Post("/modules/{type}/{id}/toggle", s.handleToggleModule)
-
-		// 同步队列
 		r.Get("/sync/queue", s.handleGetSyncQueue)
 		r.Post("/sync/queue/retry/{tid}", s.handleRetrySyncTask)
-
-		// 日志
 		r.Get("/logs", s.handleGetLogs)
 	})
 
-	// WebSocket 日志流（独立路由，避免被中间件干扰查询参数）
+	// WebSocket 日志流
 	r.Get("/api/logs/stream", s.handleLogStream)
 
-	// 前端静态文件
-	fileServer := http.FileServer(http.Dir("internal/web/dist"))
-	r.Handle("/*", fileServer)
+	// 前端 SPA：先尝试匹配静态文件，匹配不到则返回 index.html
+	fileServer := http.FileServer(http.Dir(WebRoot))
+	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+		fullPath := filepath.Join(WebRoot, path)
+		// 文件存在则直接提供
+		if fi, err := os.Stat(fullPath); err == nil && !fi.IsDir() {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		// 否则返回 index.html（SPA fallback）
+		r.URL.Path = "/index.html"
+		fileServer.ServeHTTP(w, r)
+	})
 
 	return r
 }
