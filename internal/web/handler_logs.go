@@ -30,9 +30,13 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 		lines = l
 	}
 
-	logFile := core.GetSettings().GetLogFile()
+	logFile := core.CurrentLogFile()
 	entries, err := tailLogFile(logFile, lines)
 	if err != nil {
+		if os.IsNotExist(err) {
+			json.NewEncoder(w).Encode([]string{})
+			return
+		}
 		http.Error(w, `{"error":"读取日志失败"}`, http.StatusInternalServerError)
 		return
 	}
@@ -41,7 +45,7 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 	if levelFilter != "" {
 		var filtered []string
 		for _, entry := range entries {
-			if strings.Contains(entry, "["+strings.ToUpper(levelFilter)+"]") {
+			if strings.Contains(strings.ToLower(entry), "["+strings.ToLower(levelFilter)+"]") {
 				filtered = append(filtered, entry)
 			}
 		}

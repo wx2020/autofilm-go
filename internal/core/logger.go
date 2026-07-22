@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,11 +27,11 @@ func InitLogger() {
 	logger = logrus.New()
 	logger.SetOutput(io.Discard)
 	logger.SetFormatter(&logrus.TextFormatter{
-		DisableColors:    false,
-		FullTimestamp:    true,
-		TimestampFormat:  "2006-01-02 15:04:05",
-		ForceColors:      true,
-		DisableQuote:     true,
+		DisableColors:   false,
+		FullTimestamp:   true,
+		TimestampFormat: "2006-01-02 15:04:05",
+		ForceColors:     true,
+		DisableQuote:    true,
 	})
 
 	// 设置日志级别
@@ -117,11 +118,11 @@ func (hook *ConsoleHook) Levels() []logrus.Level {
 
 // FileHook 文件日志钩子
 type FileHook struct {
-	basePath  string        // 日志文件基本路径（不含日期）
-	currentDate string      // 当前日志文件的日期
-	file       *os.File     // 当前日志文件句柄
-	formatter  *CustomFormatter
-	mu         sync.Mutex   // 保护并发访问
+	basePath    string   // 日志文件基本路径（不含日期）
+	currentDate string   // 当前日志文件的日期
+	file        *os.File // 当前日志文件句柄
+	formatter   *CustomFormatter
+	mu          sync.Mutex // 保护并发访问
 }
 
 // NewFileHook 创建文件日志钩子
@@ -140,6 +141,20 @@ func NewFileHook(basePath string) *FileHook {
 	return hook
 }
 
+// DatedLogPath returns the actual daily file used by FileHook.
+func DatedLogPath(basePath string, date time.Time) string {
+	dir := filepath.Dir(basePath)
+	baseName := filepath.Base(basePath)
+	ext := filepath.Ext(baseName)
+	nameWithoutExt := strings.TrimSuffix(baseName, ext)
+	return filepath.Join(dir, fmt.Sprintf("%s-%s%s", nameWithoutExt, date.Format("2006-01-02"), ext))
+}
+
+// CurrentLogFile returns today's active log file path.
+func CurrentLogFile() string {
+	return DatedLogPath(GetSettings().GetLogFile(), time.Now())
+}
+
 // rotateFile 切换日志文件
 func (hook *FileHook) rotateFile() {
 	currentDate := time.Now().Format("2006-01-02")
@@ -155,13 +170,7 @@ func (hook *FileHook) rotateFile() {
 	}
 
 	// 构建新的日志文件名：AutoFilm-2026-02-23.log
-	dir := filepath.Dir(hook.basePath)
-	baseName := filepath.Base(hook.basePath)
-	ext := filepath.Ext(baseName)
-	nameWithoutExt := baseName[:len(baseName)-len(ext)]
-
-	newFileName := fmt.Sprintf("%s-%s%s", nameWithoutExt, currentDate, ext)
-	newFilePath := filepath.Join(dir, newFileName)
+	newFilePath := DatedLogPath(hook.basePath, time.Now())
 
 	// 打开新文件
 	file, err := os.OpenFile(newFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
