@@ -53,7 +53,9 @@ function toggleStream() {
 
 function startStream() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  ws = new WebSocket(`${protocol}//${location.host}/api/logs/stream`)
+  const token = sessionStorage.getItem('autofilm_token')
+  const query = token ? `?token=${encodeURIComponent(token)}` : ''
+  ws = new WebSocket(`${protocol}//${location.host}/api/logs/stream${query}`)
   ws.onopen = () => { streaming.value = true }
   ws.onmessage = (e) => {
     logLines.value.push(e.data)

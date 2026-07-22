@@ -1,6 +1,7 @@
 <template>
   <div>
     <h3 class="mb-4"><i class="bi-arrow-left-right me-2"></i>同步任务队列</h3>
+    <ModuleConfigEditor type="alissync" :defaults="defaults" @changed="load" />
     <div class="table-responsive">
       <table class="table table-hover">
         <thead>
@@ -41,9 +42,11 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import ModuleCard from '../components/ModuleCard.vue'
+import ModuleConfigEditor from '../components/ModuleConfigEditor.vue'
 
 const tasks = ref([])
 const syncModules = ref([])
+const defaults = { id: 'cloud-sync', enable: true, run_on_start: false, url: 'http://127.0.0.1:5244', username: '', password: '', token: '', pairs: [{ src: '/source', dst: '/target', delete_src: false, overwrite: 'if_newer' }], retry: { max_attempts: 10, backoff: 'expo', jitter: 0.2 }, cron: '0 0 */2 * * *' }
 
 function stateBadge(state) {
   return {

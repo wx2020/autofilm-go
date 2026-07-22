@@ -42,9 +42,22 @@ go build -o autofilm ./cmd/autofilm
 ./autofilm
 ```
 
+启动后访问 `http://127.0.0.1:8080`。生产构建会将 Vue WebUI 嵌入 Go
+二进制，因此运行时不需要单独复制 `webui` 或 `dist` 目录。
+
+Web 服务可在管理界面的“系统设置”中配置。系统设置和四类模块配置均
+保存在 `/data/autofilm.db`（本地运行时为可执行文件旁的 `data` 目录），
+不需要手工维护 YAML。
+
+Docker Compose 已通过 `AUTOFILM_WEB_HOST=0.0.0.0` 开放容器监听地址。
+对外提供服务时建议设置 `AUTOFILM_WEB_TOKEN`，之后使用
+`http://host:8080/?token=你的令牌` 首次打开管理界面。
+
 ## 配置
 
-配置文件位于 `config/config.yaml`，首次运行会自动创建默认配置。
+打开 Web 管理界面，在对应模块页面新增、编辑或删除配置。保存后会自动
+重建定时任务。旧版本的 `config.yaml` 会在数据库为空时自动导入一次，
+导入后不再参与运行。
 
 ### Alist2Strm 配置
 
@@ -155,6 +168,9 @@ go fmt ./...
 
 # 运行测试
 go test ./...
+
+# 构建前端（修改 webui 后执行）
+cd webui && npm ci && npm run build
 
 # 构建多平台版本
 GOOS=linux GOARCH=amd64 go build -o autofilm-linux-amd64 ./cmd/autofilm

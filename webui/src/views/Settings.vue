@@ -1,64 +1,89 @@
 <template>
   <div>
     <h3 class="mb-4"><i class="bi-gear me-2"></i>系统设置</h3>
-    <div class="alert alert-info">
-      <i class="bi-info-circle me-2"></i>编辑配置文件并保存后将触发热重载，所有定时任务将自动重建。
-    </div>
-    <div class="mb-3">
-      <label class="form-label">配置文件 (config.yaml)</label>
-      <textarea v-model="configRaw" class="form-control font-monospace" rows="30"></textarea>
-    </div>
-    <button class="btn btn-primary" @click="saveConfig" :disabled="saving">
-      <i class="bi-save me-2"></i>{{ saving ? '保存中...' : '保存配置' }}
-    </button>
-    <div v-if="msg" class="mt-2 alert" :class="msgType">{{ msg }}</div>
+    <form class="card" @submit.prevent="save">
+      <div class="card-header fw-semibold">基础设置</div>
+      <div class="card-body row g-3">
+        <div class="col-md-6">
+          <label class="form-label">时区</label>
+          <select v-model="form.timezone" class="form-select">
+            <option value="Asia/Shanghai">Asia/Shanghai（中国标准时间）</option>
+            <option value="Asia/Hong_Kong">Asia/Hong_Kong</option>
+            <option value="Asia/Tokyo">Asia/Tokyo</option>
+            <option value="UTC">UTC</option>
+          </select>
+        </div>
+        <div class="col-md-6 d-flex align-items-end">
+          <div class="form-check form-switch mb-2">
+            <input id="debug" v-model="form.debug" class="form-check-input" type="checkbox">
+            <label class="form-check-label" for="debug">调试日志</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="card-header border-top fw-semibold">Web 管理服务</div>
+      <div class="card-body row g-3">
+        <div class="col-12">
+          <div class="form-check form-switch">
+            <input id="webEnabled" v-model="form.web_enabled" class="form-check-input" type="checkbox">
+            <label class="form-check-label" for="webEnabled">启用 Web 管理界面</label>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">监听地址</label>
+          <select v-model="form.web_host" class="form-select">
+            <option value="127.0.0.1">127.0.0.1（仅本机，推荐）</option>
+            <option value="0.0.0.0">0.0.0.0（局域网/容器）</option>
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">端口</label>
+          <input v-model.number="form.web_port" type="number" min="1" max="65535" class="form-control" required>
+        </div>
+        <div class="col-12">
+          <label class="form-label">访问令牌</label>
+          <input v-model="form.web_token" type="password" class="form-control" autocomplete="new-password" placeholder="留空表示不启用 API 鉴权">
+          <div class="form-text">监听 0.0.0.0 时强烈建议设置。可通过 <code>?token=令牌</code> 首次进入界面。</div>
+        </div>
+      </div>
+
+      <div class="card-footer d-flex align-items-center gap-3">
+        <button class="btn btn-primary" :disabled="saving"><i class="bi-save me-2"></i>{{ saving ? '保存中…' : '保存设置' }}</button>
+        <span v-if="message" :class="error ? 'text-danger' : 'text-success'">{{ message }}</span>
+      </div>
+    </form>
+    <div class="alert alert-secondary mt-3 mb-0"><i class="bi-database me-2"></i>系统和模块配置均保存在 SQLite，不再使用 config.yaml。</div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 
-const configRaw = ref('')
+const form = reactive({ debug: false, timezone: 'Asia/Shanghai', web_enabled: true, web_host: '127.0.0.1', web_port: 8080, web_token: '' })
 const saving = ref(false)
-const msg = ref('')
-const msgType = ref('')
+const message = ref('')
+const error = ref(false)
 
-function showMsg(text, type = 'alert-success') {
-  msg.value = text
-  msgType.value = type
-  setTimeout(() => { msg.value = '' }, 5000)
-}
-
-async function loadConfig() {
+async function load() {
   try {
     const res = await fetch('/api/config')
     const data = await res.json()
-    configRaw.value = data.raw || ''
-  } catch (e) {
-    showMsg('读取配置失败: ' + e.message, 'alert-danger')
-  }
+    if (!res.ok) throw new Error(data.error || '读取失败')
+    Object.assign(form, data)
+  } catch (e) { error.value = true; message.value = e.message }
 }
 
-async function saveConfig() {
-  saving.value = true
+async function save() {
+  saving.value = true; message.value = ''
   try {
-    const res = await fetch('/api/config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ raw: configRaw.value })
-    })
+    const res = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
     const data = await res.json()
-    if (data.success) {
-      showMsg('配置已保存，定时任务已重建')
-    } else {
-      showMsg('保存失败: ' + (data.error || '未知错误'), 'alert-danger')
-    }
-  } catch (e) {
-    showMsg('保存失败: ' + e.message, 'alert-danger')
-  } finally {
-    saving.value = false
-  }
+    if (!res.ok) throw new Error(data.error || '保存失败')
+    error.value = false
+    message.value = data.restart_required ? '已保存；Web 地址、端口和鉴权设置将在重启后生效。' : '已保存。'
+  } catch (e) { error.value = true; message.value = e.message }
+  finally { saving.value = false }
 }
 
-onMounted(loadConfig)
+onMounted(load)
 </script>
