@@ -1,6 +1,6 @@
 # 构建参数
 ARG VERSION=dev
-ARG GO_VERSION=1.24
+ARG GO_VERSION=1.25
 ARG NODE_VERSION=22
 
 # ========= 前端构建阶段 =========
@@ -28,7 +28,7 @@ RUN go mod download
 COPY . .
 
 # 从前端构建阶段复制 dist
-COPY --from=web-builder /build/webui/ ../internal/web/dist
+COPY --from=web-builder /build/webui/dist ./internal/web/dist
 
 # 构建参数传递
 ARG VERSION

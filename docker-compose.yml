@@ -18,6 +18,9 @@ services:
 
     environment:
       - TZ=Asia/Shanghai
+      - AUTOFILM_WEB_HOST=0.0.0.0
+      # 建议取消注释并设置强随机 Token，公网部署必须设置
+      # - AUTOFILM_WEB_TOKEN=change-me
 
     # 如果需要查看日志
     # logging:
