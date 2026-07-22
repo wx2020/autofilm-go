@@ -3,13 +3,117 @@ package storage
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
 // Store 数据库 CRUD 操作封装
 type Store struct {
-	db *sql.DB
+	db  *sql.DB
 	key []byte // AES-GCM 加密密钥
+}
+
+type AppSettings struct {
+	Debug      bool   `json:"debug"`
+	Timezone   string `json:"timezone"`
+	WebEnabled bool   `json:"web_enabled"`
+	WebHost    string `json:"web_host"`
+	WebPort    int    `json:"web_port"`
+	WebToken   string `json:"web_token,omitempty"`
+}
+
+func DefaultAppSettings() AppSettings {
+	return AppSettings{Timezone: "Asia/Shanghai", WebEnabled: true, WebHost: "127.0.0.1", WebPort: 8080}
+}
+
+func (s *Store) GetAppSettings() (AppSettings, error) {
+	settings := DefaultAppSettings()
+	rows, err := s.db.Query("SELECT key, value FROM app_settings")
+	if err != nil {
+		return settings, err
+	}
+	defer rows.Close()
+	values := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return settings, err
+		}
+		values[k] = v
+	}
+	if v := values["settings"]; v != "" {
+		if err := json.Unmarshal([]byte(v), &settings); err != nil {
+			return settings, err
+		}
+	}
+	return settings, rows.Err()
+}
+
+func (s *Store) SaveAppSettings(settings AppSettings) error {
+	if settings.Timezone == "" {
+		settings.Timezone = "Asia/Shanghai"
+	}
+	if settings.WebHost == "" {
+		settings.WebHost = "127.0.0.1"
+	}
+	if settings.WebPort < 1 || settings.WebPort > 65535 {
+		return fmt.Errorf("Web 端口必须在 1-65535 之间")
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`INSERT INTO app_settings(key,value,updated_at) VALUES('settings',?,CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP`, string(data))
+	return err
+}
+
+func (s *Store) ListModuleConfigs(moduleType string) ([]map[string]interface{}, error) {
+	rows, err := s.db.Query("SELECT payload FROM module_configs WHERE module_type=? ORDER BY id", moduleType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []map[string]interface{}{}
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		plain, err := Decrypt(s.key, payload)
+		if err != nil {
+			return nil, err
+		}
+		var cfg map[string]interface{}
+		if err := json.Unmarshal([]byte(plain), &cfg); err != nil {
+			return nil, err
+		}
+		result = append(result, cfg)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) SaveModuleConfig(moduleType string, cfg map[string]interface{}) error {
+	id := fmt.Sprint(cfg["id"])
+	if id == "" || id == "<nil>" {
+		return fmt.Errorf("配置 ID 不能为空")
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	payload, err := Encrypt(s.key, string(data))
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`INSERT INTO module_configs(module_type,cfg_id,payload) VALUES(?,?,?)
+		ON CONFLICT(module_type,cfg_id) DO UPDATE SET payload=excluded.payload,updated_at=CURRENT_TIMESTAMP`, moduleType, id, payload)
+	return err
+}
+
+func (s *Store) DeleteModuleConfig(moduleType, id string) error {
+	_, err := s.db.Exec("DELETE FROM module_configs WHERE module_type=? AND cfg_id=?", moduleType, id)
+	return err
 }
 
 // NewStore 创建 Store 实例
@@ -132,11 +236,11 @@ func (s *Store) listConfigs(table string, scan func(*sql.Rows) (map[string]inter
 func (s *Store) scanAlist2StrmConfig(rows *sql.Rows) (map[string]interface{}, error) {
 	var (
 		id, cfgID, srcDir, tgtDir, mode, otherExt, syncIgnore, smartJSON, sMode, cron string
-		enable, runOnStart, flattenMode, subtitle, image, nfo, overwrite, syncServer bool
-		maxWorkers, maxDownloaders, qpsLimit, connID int
-		waitTime float64
-		createdAt, updatedAt string
-		connName, url, username, password, token, publicURL string
+		enable, runOnStart, flattenMode, subtitle, image, nfo, overwrite, syncServer  bool
+		maxWorkers, maxDownloaders, qpsLimit, connID                                  int
+		waitTime                                                                      float64
+		createdAt, updatedAt                                                          string
+		connName, url, username, password, token, publicURL                           string
 	)
 	err := rows.Scan(&id, &cfgID, &enable, &runOnStart, &connID,
 		&srcDir, &tgtDir, &flattenMode, &subtitle, &image, &nfo,
@@ -168,10 +272,10 @@ func (s *Store) scanAlist2StrmConfig(rows *sql.Rows) (map[string]interface{}, er
 
 func (s *Store) scanAlisyncConfig(rows *sql.Rows) (map[string]interface{}, error) {
 	var (
-		id, cfgID, pairsJSON, retryJSON, cron string
-		enable, runOnStart bool
-		connID int
-		createdAt, updatedAt string
+		id, cfgID, pairsJSON, retryJSON, cron    string
+		enable, runOnStart                       bool
+		connID                                   int
+		createdAt, updatedAt                     string
 		connName, url, username, password, token string
 	)
 	err := rows.Scan(&id, &cfgID, &enable, &runOnStart, &connID,
@@ -200,11 +304,11 @@ func (s *Store) scanAlisyncConfig(rows *sql.Rows) (map[string]interface{}, error
 func (s *Store) scanAni2AlistConfig(rows *sql.Rows) (map[string]interface{}, error) {
 	var (
 		id, cfgID, tgtDir, srcDomain, rssDomain, keyWord, cron string
-		enable, runOnStart, rssUpdate bool
-		year, month sql.NullInt64
-		connID int
-		createdAt, updatedAt string
-		connName, url, username, password, token string
+		enable, runOnStart, rssUpdate                          bool
+		year, month                                            sql.NullInt64
+		connID                                                 int
+		createdAt, updatedAt                                   string
+		connName, url, username, password, token               string
 	)
 	err := rows.Scan(&id, &cfgID, &enable, &runOnStart, &connID,
 		&tgtDir, &rssUpdate, &year, &month, &srcDomain, &rssDomain, &keyWord, &cron,
@@ -232,11 +336,11 @@ func (s *Store) scanAni2AlistConfig(rows *sql.Rows) (map[string]interface{}, err
 
 // SnapshotEntry 快照条目
 type SnapshotEntry struct {
-	ConfigID  int64
-	Path      string
-	Size      int64
-	Modified  string
-	Sign      string
+	ConfigID int64
+	Path     string
+	Size     int64
+	Modified string
+	Sign     string
 }
 
 // SaveSnapshot 批量保存快照（事务替换）

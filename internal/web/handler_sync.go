@@ -13,7 +13,7 @@ import (
 
 // handleGetSyncQueue GET /api/sync/queue
 func (s *Server) handleGetSyncQueue(w http.ResponseWriter, r *http.Request) {
-	queueDir := filepath.Join(core.Store().GetConfigDir(), "sync_queue")
+	queueDir := filepath.Join(core.GetSettings().GetDataDir(), "sync_queue")
 	entries, err := os.ReadDir(queueDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -52,7 +52,7 @@ func (s *Server) handleRetrySyncTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 从队列目录读取任务 JSON，将 state 改为 "failed" 以便守护协程重试
-	queueDir := filepath.Join(core.Store().GetConfigDir(), "sync_queue")
+	queueDir := filepath.Join(core.GetSettings().GetDataDir(), "sync_queue")
 	taskPath := filepath.Join(queueDir, tid+".json")
 
 	data, err := os.ReadFile(taskPath)

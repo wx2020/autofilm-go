@@ -39,7 +39,7 @@ type SettingManager struct {
 	debug     bool
 	timezone  string
 	viper     *viper.Viper
-	viperMu   sync.Mutex  // viper 非线程安全，需加锁串行访问
+	viperMu   sync.Mutex // viper 非线程安全，需加锁串行访问
 }
 
 // GetSettings 获取配置管理器单例
@@ -86,23 +86,17 @@ func (sm *SettingManager) mkdir() {
 
 // loadConfig 加载配置文件
 func (sm *SettingManager) loadConfig() {
-	configFile := filepath.Join(sm.configDir, "config.yaml")
-	sm.viper.SetConfigFile(configFile)
-	sm.viper.SetConfigType("yaml")
+	// 系统与模块配置保存在 SQLite。环境变量仅用于首次启动覆盖。
+	_ = sm.viper.BindEnv("Settings.Web.Enabled", "AUTOFILM_WEB_ENABLED")
+	_ = sm.viper.BindEnv("Settings.Web.Host", "AUTOFILM_WEB_HOST")
+	_ = sm.viper.BindEnv("Settings.Web.Port", "AUTOFILM_WEB_PORT")
+	_ = sm.viper.BindEnv("Settings.Web.Token", "AUTOFILM_WEB_TOKEN")
 
-	// 读取配置文件
-	if err := sm.viper.ReadInConfig(); err != nil {
-		// viper 在使用 SetConfigFile 模式下，文件不存在时返回 *os.PathError，
-		// 而非 viper.ConfigFileNotFoundError（后者仅在未设置具体路径时返回）。
-		// 直接以 os.Stat 兜底检查：文件不存在则创建默认配置。
-		if _, statErr := os.Stat(configFile); os.IsNotExist(statErr) {
-			sm.createDefaultConfig()
-		} else {
-			fmt.Printf("Error reading config file: %v\n", err)
-		}
-	}
-
-	// 加载设置
+	sm.viper.SetDefault("Settings.DEV", false)
+	sm.viper.SetDefault("Settings.TZ", DefaultTZ)
+	sm.viper.SetDefault("Settings.Web.Enabled", true)
+	sm.viper.SetDefault("Settings.Web.Host", "127.0.0.1")
+	sm.viper.SetDefault("Settings.Web.Port", 8080)
 	sm.debug = sm.viper.GetBool("Settings.DEV")
 	sm.timezone = sm.viper.GetString("Settings.TZ")
 	if sm.timezone == "" {
@@ -118,6 +112,11 @@ func (sm *SettingManager) createDefaultConfig() {
 	defaultConfig := `Settings:
   DEV: false
   TZ: Asia/Shanghai
+  Web:
+    Enabled: true
+    Host: 127.0.0.1
+    Port: 8080
+    Token: ""
 
 Alist2StrmList: []
   # - id: "example"
@@ -249,6 +248,35 @@ func (sm *SettingManager) IsDebug() bool {
 // GetTimezone 获取时区
 func (sm *SettingManager) GetTimezone() string {
 	return sm.timezone
+}
+
+// ApplyRuntimeSettings applies values loaded from SQLite before logger/tasks start.
+func (sm *SettingManager) ApplyRuntimeSettings(debug bool, timezone string) {
+	sm.debug = debug
+	if timezone == "" {
+		timezone = DefaultTZ
+	}
+	sm.timezone = timezone
+}
+
+// GetWebEnabled 返回是否启动 Web 管理服务。
+func (sm *SettingManager) GetWebEnabled() bool {
+	return sm.viper.GetBool("Settings.Web.Enabled")
+}
+
+// GetWebHost 返回 Web 服务监听地址。
+func (sm *SettingManager) GetWebHost() string {
+	return sm.viper.GetString("Settings.Web.Host")
+}
+
+// GetWebPort 返回 Web 服务监听端口。
+func (sm *SettingManager) GetWebPort() int {
+	return sm.viper.GetInt("Settings.Web.Port")
+}
+
+// GetWebToken 返回 API Bearer Token；为空时不启用鉴权。
+func (sm *SettingManager) GetWebToken() string {
+	return sm.viper.GetString("Settings.Web.Token")
 }
 
 // GetAlistServerList 获取 Alist2Strm 服务器列表

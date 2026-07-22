@@ -2,12 +2,14 @@ package storage
 
 import (
 	"database/sql"
+	"embed"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 )
+
+//go:embed migrations/*.sql
+var migrationFiles embed.FS
 
 // Migration 一条迁移记录
 type Migration struct {
@@ -17,7 +19,7 @@ type Migration struct {
 }
 
 // RunMigrations 执行所有未应用的迁移
-func RunMigrations(db *sql.DB, migrationsDir string) error {
+func RunMigrations(db *sql.DB) error {
 	if err := ensureMigrationsTable(db); err != nil {
 		return fmt.Errorf("创建 migrations 表失败: %w", err)
 	}
@@ -27,7 +29,7 @@ func RunMigrations(db *sql.DB, migrationsDir string) error {
 		return fmt.Errorf("读取已应用版本失败: %w", err)
 	}
 
-	migrations, err := loadMigrations(migrationsDir)
+	migrations, err := loadMigrations()
 	if err != nil {
 		return fmt.Errorf("加载迁移文件失败: %w", err)
 	}
@@ -88,12 +90,9 @@ func getAppliedVersions(db *sql.DB) (map[int]bool, error) {
 	return applied, rows.Err()
 }
 
-func loadMigrations(dir string) ([]Migration, error) {
-	entries, err := os.ReadDir(dir)
+func loadMigrations() ([]Migration, error) {
+	entries, err := migrationFiles.ReadDir("migrations")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
 
@@ -103,7 +102,7 @@ func loadMigrations(dir string) ([]Migration, error) {
 			continue
 		}
 
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		data, err := migrationFiles.ReadFile("migrations/" + entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("读取迁移文件 %s 失败: %w", entry.Name(), err)
 		}

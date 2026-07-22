@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -35,38 +35,42 @@ func main() {
 	// 初始化配置
 	settings := core.GetSettings()
 
-	// 初始化日志
-	core.InitLogger()
-	logger = core.GetLogger()
-
-	// 初始化 ConfigStore（P0：包装现有 SettingManager，启动文件监听 + 订阅广播）
-	// 后续 P3 阶段可在此处 SetStore(SQLStore) 切换后端
-	_ = core.Store()
-
-	logger.Infof("AutoFilm %s 启动中...", core.AppVersion())
-	logger.Debugf("是否开启DEBUG模式: %v", settings.IsDebug())
-
 	// 初始化 SQLite 数据库（P3）
 	dataDir := settings.GetDataDir()
 	dbCfg := storage.DefaultConfig(dataDir)
 	database, err := storage.InitDB(dbCfg)
 	if err != nil {
-		logger.Warnf("初始化数据库失败，将使用 JSON 文件存储: %v", err)
+		fmt.Printf("初始化数据库失败: %v\n", err)
 	} else {
 		// 执行数据库迁移
-		migrationsDir := filepath.Join(settings.GetConfigDir(), "..", "internal", "storage", "migrations")
-		if err := storage.RunMigrations(database, migrationsDir); err != nil {
-			logger.Warnf("数据库迁移失败: %v", err)
+		if err := storage.RunMigrations(database); err != nil {
+			fmt.Printf("数据库迁移失败: %v\n", err)
 		}
 
 		// 加载/生成加密密钥
 		key, err := storage.LoadOrCreateKey(dataDir)
 		if err != nil {
-			logger.Warnf("初始化加密密钥失败: %v", err)
+			fmt.Printf("初始化加密密钥失败: %v\n", err)
 		}
 
 		dbStore = storage.NewStore(database, key)
 		storage.SetGlobalStore(dbStore)
+		if appSettings, err := dbStore.GetAppSettings(); err == nil {
+			settings.ApplyRuntimeSettings(appSettings.Debug, appSettings.Timezone)
+		}
+		if imported, err := storage.ImportLegacyYAML(dbStore, settings.GetConfigFile()); err != nil {
+			fmt.Printf("旧 YAML 配置迁移失败: %v\n", err)
+		} else if imported > 0 {
+			fmt.Printf("已将 %d 条旧 YAML 模块配置迁移到 SQLite\n", imported)
+		}
+	}
+
+	// SQLite 设置加载完成后初始化日志，使调试模式立即生效。
+	core.InitLogger()
+	logger = core.GetLogger()
+	logger.Infof("AutoFilm %s 启动中...", core.AppVersion())
+	logger.Debugf("是否开启DEBUG模式: %v", settings.IsDebug())
+	if dbStore != nil {
 		logger.Info("数据库初始化完成")
 	}
 
@@ -76,9 +80,34 @@ func main() {
 
 	// 启动 Web 服务
 	webCfg := &web.WebConfig{
-		Enabled: true,
-		Host:    "0.0.0.0",
-		Port:    8080,
+		Enabled: settings.GetWebEnabled(),
+		Host:    settings.GetWebHost(),
+		Port:    settings.GetWebPort(),
+		Token:   settings.GetWebToken(),
+	}
+	if dbStore != nil {
+		if appSettings, err := dbStore.GetAppSettings(); err == nil {
+			webCfg.Enabled = appSettings.WebEnabled
+			webCfg.Host = appSettings.WebHost
+			webCfg.Port = appSettings.WebPort
+			webCfg.Token = appSettings.WebToken
+		}
+	}
+	if value, ok := os.LookupEnv("AUTOFILM_WEB_HOST"); ok {
+		webCfg.Host = value
+	}
+	if value, ok := os.LookupEnv("AUTOFILM_WEB_TOKEN"); ok {
+		webCfg.Token = value
+	}
+	if value, ok := os.LookupEnv("AUTOFILM_WEB_PORT"); ok {
+		if port, err := strconv.Atoi(value); err == nil {
+			webCfg.Port = port
+		}
+	}
+	if value, ok := os.LookupEnv("AUTOFILM_WEB_ENABLED"); ok {
+		if enabled, err := strconv.ParseBool(value); err == nil {
+			webCfg.Enabled = enabled
+		}
 	}
 	webServer := web.NewServer(webCfg)
 	if err := webServer.Start(); err != nil {
@@ -135,9 +164,6 @@ func main() {
 				reg := web.GetModuleRegistry()
 				reg.Clear()
 
-				// 重新加载配置
-				settings.ReloadConfig()
-
 				// 重建 cron 调度器
 				cronScheduler = cron.New(cron.WithSeconds())
 
@@ -182,33 +208,24 @@ func main() {
 }
 
 func getAlist2StrmList() []map[string]interface{} {
-	if s := storage.GlobalStore(); s != nil {
-		list, err := s.ListAlist2StrmConfigs()
-		if err == nil && len(list) > 0 {
-			return list
-		}
-	}
-	return core.GetSettings().GetAlistServerList()
+	return getModuleConfigs("alist2strm")
 }
 
 func getAni2AlistList() []map[string]interface{} {
-	if s := storage.GlobalStore(); s != nil {
-		list, err := s.ListAni2AlistConfigs()
-		if err == nil && len(list) > 0 {
-			return list
-		}
-	}
-	return core.GetSettings().GetAni2AlistList()
+	return getModuleConfigs("ani2alist")
 }
 
 func getAlisyncList() []map[string]interface{} {
+	return getModuleConfigs("alissync")
+}
+
+func getModuleConfigs(moduleType string) []map[string]interface{} {
 	if s := storage.GlobalStore(); s != nil {
-		list, err := s.ListAlisyncConfigs()
-		if err == nil && len(list) > 0 {
+		if list, err := s.ListModuleConfigs(moduleType); err == nil {
 			return list
 		}
 	}
-	return core.GetSettings().GetAlistSyncList()
+	return []map[string]interface{}{}
 }
 
 // addAlist2StrmJobs 添加Alist2Strm定时任务
@@ -339,8 +356,7 @@ func addAni2AlistJobs(c *cron.Cron) error {
 
 // addLibraryPosterJobs 添加LibraryPoster定时任务
 func addLibraryPosterJobs(c *cron.Cron) error {
-	settings := core.GetSettings()
-	list := settings.GetLibraryPosterList()
+	list := getModuleConfigs("libraryposter")
 
 	if len(list) == 0 {
 		logger := core.GetLogger()

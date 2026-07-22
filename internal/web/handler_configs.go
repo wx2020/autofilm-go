@@ -9,84 +9,72 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// handleListDbConfigs GET /api/configs/{type}  列出 DB 中的模块配置
-func (s *Server) handleListDbConfigs(w http.ResponseWriter, r *http.Request) {
+var moduleTypes = map[string]bool{"alist2strm": true, "ani2alist": true, "libraryposter": true, "alissync": true}
+
+func moduleStore(w http.ResponseWriter, r *http.Request) (*storage.Store, string, bool) {
 	typ := chi.URLParam(r, "type")
+	if !moduleTypes[typ] {
+		writeJSONError(w, http.StatusBadRequest, "未知模块类型")
+		return nil, "", false
+	}
 	store := storage.GlobalStore()
 	if store == nil {
-		http.Error(w, `{"error":"数据库不可用"}`, http.StatusServiceUnavailable)
-		return
+		writeJSONError(w, http.StatusServiceUnavailable, "数据库不可用")
+		return nil, "", false
 	}
-	var list []map[string]interface{}
-	var err error
-	switch typ {
-	case "alist2strm":
-		list, err = store.ListAlist2StrmConfigs()
-	case "ani2alist":
-		list, err = store.ListAni2AlistConfigs()
-	case "alissync":
-		list, err = store.ListAlisyncConfigs()
-	default:
-		http.Error(w, `{"error":"未知类型"}`, http.StatusBadRequest)
-		return
-	}
-	if err != nil {
-		http.Error(w, `{"error":"查询失败"}`, http.StatusInternalServerError)
-		return
-	}
-	if list == nil {
-		list = []map[string]interface{}{}
-	}
-	json.NewEncoder(w).Encode(list)
+	return store, typ, true
 }
 
-// handleSaveDbConfig POST /api/configs/{type}  创建或更新模块配置
+func (s *Server) handleListDbConfigs(w http.ResponseWriter, r *http.Request) {
+	store, typ, ok := moduleStore(w, r)
+	if !ok {
+		return
+	}
+	list, err := store.ListModuleConfigs(typ)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
 func (s *Server) handleSaveDbConfig(w http.ResponseWriter, r *http.Request) {
-	typ := chi.URLParam(r, "type")
-	store := storage.GlobalStore()
-	if store == nil {
-		http.Error(w, `{"error":"数据库不可用"}`, http.StatusServiceUnavailable)
+	store, typ, ok := moduleStore(w, r)
+	if !ok {
 		return
 	}
 	var cfg map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		http.Error(w, `{"error":"解析失败"}`, http.StatusBadRequest)
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&cfg); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "配置格式无效")
 		return
 	}
-	if err := store.ImportConfigMap(typ, cfg); err != nil {
-		http.Error(w, `{"error":"保存失败"}`, http.StatusInternalServerError)
+	if err := store.SaveModuleConfig(typ, cfg); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	core.TriggerReload()
-	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
-// handleDeleteDbConfig DELETE /api/configs/{type}/{id}  删除模块配置
 func (s *Server) handleDeleteDbConfig(w http.ResponseWriter, r *http.Request) {
-	typ := chi.URLParam(r, "type")
-	id := chi.URLParam(r, "id")
-	store := storage.GlobalStore()
-	if store == nil {
-		http.Error(w, `{"error":"数据库不可用"}`, http.StatusServiceUnavailable)
+	store, typ, ok := moduleStore(w, r)
+	if !ok {
 		return
 	}
-	var table string
-	switch typ {
-	case "alist2strm":
-		table = "alist2strm_configs"
-	case "ani2alist":
-		table = "ani2alist_configs"
-	case "alissync":
-		table = "alisync_configs"
-	default:
-		http.Error(w, `{"error":"未知类型"}`, http.StatusBadRequest)
-		return
-	}
-	_, err := store.DB().Exec("DELETE FROM "+table+" WHERE cfg_id = ?", id)
-	if err != nil {
-		http.Error(w, `{"error":"删除失败"}`, http.StatusInternalServerError)
+	if err := store.DeleteModuleConfig(typ, chi.URLParam(r, "id")); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	core.TriggerReload()
-	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+func writeJSON(w http.ResponseWriter, status int, value interface{}) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
 }
