@@ -23,6 +23,16 @@ func (s *Server) handleAlistTest(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 	password := r.URL.Query().Get("password")
 	token := r.URL.Query().Get("token")
+	if r.Method == http.MethodPost {
+		var body struct {
+			URL, Username, Password, Token string
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "请求格式无效")
+			return
+		}
+		url, username, password, token = body.URL, body.Username, body.Password, body.Token
+	}
 
 	if url == "" {
 		http.Error(w, `{"error":"缺少 url 参数"}`, http.StatusBadRequest)
@@ -31,7 +41,7 @@ func (s *Server) handleAlistTest(w http.ResponseWriter, r *http.Request) {
 
 	client, err := alist.GetClient(url, username, password, token)
 	if err != nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, http.StatusBadGateway, map[string]interface{}{
 			"success": false,
 			"error":   err.Error(),
 		})
@@ -41,14 +51,14 @@ func (s *Server) handleAlistTest(w http.ResponseWriter, r *http.Request) {
 	// 尝试 fs/list 一次根目录
 	_, err = client.FSListLight(r.Context(), "/")
 	if err != nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, http.StatusBadGateway, map[string]interface{}{
 			"success": false,
 			"error":   err.Error(),
 		})
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"message": "Alist 连接正常",
 	})

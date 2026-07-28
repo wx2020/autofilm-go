@@ -14,12 +14,13 @@ type Store struct {
 }
 
 type AppSettings struct {
-	Debug      bool   `json:"debug"`
-	Timezone   string `json:"timezone"`
-	WebEnabled bool   `json:"web_enabled"`
-	WebHost    string `json:"web_host"`
-	WebPort    int    `json:"web_port"`
-	WebToken   string `json:"web_token,omitempty"`
+	Debug        bool   `json:"debug"`
+	Timezone     string `json:"timezone"`
+	WebEnabled   bool   `json:"web_enabled"`
+	WebHost      string `json:"web_host"`
+	WebPort      int    `json:"web_port"`
+	WebToken     string `json:"web_token,omitempty"`
+	AlertWebhook string `json:"alert_webhook,omitempty"`
 }
 
 func DefaultAppSettings() AppSettings {
@@ -390,12 +391,52 @@ func (s *Store) LoadSnapshot(configID int64) ([]SnapshotEntry, error) {
 	return entries, rows.Err()
 }
 
+func (s *Store) SaveSnapshotByUID(configUID string, entries []SnapshotEntry) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("DELETE FROM module_snapshots WHERE config_uid=?", configUID); err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare("INSERT INTO module_snapshots(config_uid,path,size,modified,sign) VALUES(?,?,?,?,?)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, entry := range entries {
+		if _, err = stmt.Exec(configUID, entry.Path, entry.Size, entry.Modified, entry.Sign); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) LoadSnapshotByUID(configUID string) ([]SnapshotEntry, error) {
+	rows, err := s.db.Query("SELECT path,size,modified,sign FROM module_snapshots WHERE config_uid=?", configUID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entries := []SnapshotEntry{}
+	for rows.Next() {
+		var e SnapshotEntry
+		if err := rows.Scan(&e.Path, &e.Size, &e.Modified, &e.Sign); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
 // ==================== 同步任务 ====================
 
 // SyncTaskRow 同步任务行
 type SyncTaskRow struct {
 	ID           int64      `json:"id"`
 	SyncConfigID int64      `json:"sync_config_id"`
+	ConfigUID    string     `json:"config_uid"`
 	SrcPath      string     `json:"src_path"`
 	DstPath      string     `json:"dst_path"`
 	State        string     `json:"state"`
@@ -409,9 +450,9 @@ type SyncTaskRow struct {
 
 // CreateSyncTask 创建同步任务
 func (s *Store) CreateSyncTask(t *SyncTaskRow) (int64, error) {
-	res, err := s.db.Exec(`INSERT INTO sync_tasks (sync_config_id, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.SyncConfigID, t.SrcPath, t.DstPath, t.State, t.AlistTaskID, t.Attempts, t.LastError, t.NextRetryAt)
+	res, err := s.db.Exec(`INSERT INTO sync_tasks (sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.SyncConfigID, t.ConfigUID, t.SrcPath, t.DstPath, t.State, t.AlistTaskID, t.Attempts, t.LastError, t.NextRetryAt)
 	if err != nil {
 		return 0, err
 	}
@@ -420,14 +461,14 @@ func (s *Store) CreateSyncTask(t *SyncTaskRow) (int64, error) {
 
 // UpdateSyncTask 更新同步任务
 func (s *Store) UpdateSyncTask(t *SyncTaskRow) error {
-	_, err := s.db.Exec(`UPDATE sync_tasks SET state=?, alist_task_id=?, attempts=?, last_error=?, next_retry_at=?, updated_at=CURRENT_TIMESTAMP
-		WHERE id=?`, t.State, t.AlistTaskID, t.Attempts, t.LastError, t.NextRetryAt, t.ID)
+	_, err := s.db.Exec(`UPDATE sync_tasks SET config_uid=?, state=?, alist_task_id=?, attempts=?, last_error=?, next_retry_at=?, updated_at=CURRENT_TIMESTAMP
+		WHERE id=?`, t.ConfigUID, t.State, t.AlistTaskID, t.Attempts, t.LastError, t.NextRetryAt, t.ID)
 	return err
 }
 
 // ListSyncTasksByState 按状态列出同步任务
 func (s *Store) ListSyncTasksByState(state string) ([]*SyncTaskRow, error) {
-	rows, err := s.db.Query(`SELECT id, sync_config_id, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
+	rows, err := s.db.Query(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
 		FROM sync_tasks WHERE state = ? ORDER BY created_at`, state)
 	if err != nil {
 		return nil, err
@@ -438,7 +479,7 @@ func (s *Store) ListSyncTasksByState(state string) ([]*SyncTaskRow, error) {
 
 // ListPendingRetryTasks 列出待重试任务（state=failed 且 next_retry_at <= now）
 func (s *Store) ListPendingRetryTasks() ([]*SyncTaskRow, error) {
-	rows, err := s.db.Query(`SELECT id, sync_config_id, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
+	rows, err := s.db.Query(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
 		FROM sync_tasks WHERE state IN ('failed','dead_letter') ORDER BY next_retry_at`)
 	if err != nil {
 		return nil, err
@@ -449,7 +490,7 @@ func (s *Store) ListPendingRetryTasks() ([]*SyncTaskRow, error) {
 
 // ListAllSyncTasks 列出所有同步任务
 func (s *Store) ListAllSyncTasks() ([]*SyncTaskRow, error) {
-	rows, err := s.db.Query(`SELECT id, sync_config_id, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
+	rows, err := s.db.Query(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
 		FROM sync_tasks ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -459,10 +500,10 @@ func (s *Store) ListAllSyncTasks() ([]*SyncTaskRow, error) {
 }
 
 func scanSyncTasks(rows *sql.Rows) ([]*SyncTaskRow, error) {
-	var tasks []*SyncTaskRow
+	tasks := make([]*SyncTaskRow, 0)
 	for rows.Next() {
 		t := &SyncTaskRow{}
-		if err := rows.Scan(&t.ID, &t.SyncConfigID, &t.SrcPath, &t.DstPath, &t.State, &t.AlistTaskID,
+		if err := rows.Scan(&t.ID, &t.SyncConfigID, &t.ConfigUID, &t.SrcPath, &t.DstPath, &t.State, &t.AlistTaskID,
 			&t.Attempts, &t.LastError, &t.NextRetryAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -473,10 +514,21 @@ func scanSyncTasks(rows *sql.Rows) ([]*SyncTaskRow, error) {
 
 // GetSyncTaskByDstPath 按目标路径查询同步任务
 func (s *Store) GetSyncTaskByDstPath(dstPath string) (*SyncTaskRow, error) {
-	row := s.db.QueryRow(`SELECT id, sync_config_id, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
+	row := s.db.QueryRow(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
 		FROM sync_tasks WHERE dst_path = ?`, dstPath)
 	t := &SyncTaskRow{}
-	if err := row.Scan(&t.ID, &t.SyncConfigID, &t.SrcPath, &t.DstPath, &t.State, &t.AlistTaskID,
+	if err := row.Scan(&t.ID, &t.SyncConfigID, &t.ConfigUID, &t.SrcPath, &t.DstPath, &t.State, &t.AlistTaskID,
+		&t.Attempts, &t.LastError, &t.NextRetryAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+func (s *Store) GetSyncTaskByID(id int64) (*SyncTaskRow, error) {
+	row := s.db.QueryRow(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
+		FROM sync_tasks WHERE id = ?`, id)
+	t := &SyncTaskRow{}
+	if err := row.Scan(&t.ID, &t.SyncConfigID, &t.ConfigUID, &t.SrcPath, &t.DstPath, &t.State, &t.AlistTaskID,
 		&t.Attempts, &t.LastError, &t.NextRetryAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -512,6 +564,7 @@ type TaskRun struct {
 	ID            int64      `json:"id"`
 	ModuleType    string     `json:"module_type"`
 	ConfigID      int64      `json:"config_id"`
+	ConfigUID     string     `json:"config_uid"`
 	StartedAt     time.Time  `json:"started_at"`
 	FinishedAt    *time.Time `json:"finished_at"`
 	Status        string     `json:"status"`
@@ -524,9 +577,9 @@ type TaskRun struct {
 
 // CreateTaskRun 创建运行记录
 func (s *Store) CreateTaskRun(r *TaskRun) (int64, error) {
-	res, err := s.db.Exec(`INSERT INTO task_runs (module_type, config_id, started_at, status, files_total, files_added, files_modified, files_deleted)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.ModuleType, r.ConfigID, r.StartedAt, r.Status, r.FilesTotal, r.FilesAdded, r.FilesModified, r.FilesDeleted)
+	res, err := s.db.Exec(`INSERT INTO task_runs (module_type, config_id, config_uid, started_at, status, files_total, files_added, files_modified, files_deleted)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ModuleType, r.ConfigID, r.ConfigUID, r.StartedAt, r.Status, r.FilesTotal, r.FilesAdded, r.FilesModified, r.FilesDeleted)
 	if err != nil {
 		return 0, err
 	}
@@ -543,7 +596,7 @@ func (s *Store) FinishTaskRun(id int64, status, errSummary string, filesTotal, f
 
 // ListTaskRuns 列出运行记录
 func (s *Store) ListTaskRuns(moduleType string, limit int) ([]*TaskRun, error) {
-	rows, err := s.db.Query(`SELECT id, module_type, config_id, started_at, finished_at, status, error_summary,
+	rows, err := s.db.Query(`SELECT id, module_type, config_id, config_uid, started_at, finished_at, status, error_summary,
 		files_total, files_added, files_modified, files_deleted FROM task_runs
 		WHERE module_type=? ORDER BY started_at DESC LIMIT ?`, moduleType, limit)
 	if err != nil {
@@ -554,7 +607,30 @@ func (s *Store) ListTaskRuns(moduleType string, limit int) ([]*TaskRun, error) {
 	var runs []*TaskRun
 	for rows.Next() {
 		r := &TaskRun{}
-		if err := rows.Scan(&r.ID, &r.ModuleType, &r.ConfigID, &r.StartedAt, &r.FinishedAt,
+		if err := rows.Scan(&r.ID, &r.ModuleType, &r.ConfigID, &r.ConfigUID, &r.StartedAt, &r.FinishedAt,
+			&r.Status, &r.ErrorSummary, &r.FilesTotal, &r.FilesAdded, &r.FilesModified, &r.FilesDeleted); err != nil {
+			return nil, err
+		}
+		runs = append(runs, r)
+	}
+	return runs, rows.Err()
+}
+
+func (s *Store) ListRecentTaskRuns(limit int) ([]*TaskRun, error) {
+	if limit < 1 || limit > 1000 {
+		limit = 100
+	}
+	rows, err := s.db.Query(`SELECT id, module_type, config_id, config_uid, started_at, finished_at, status, error_summary,
+		files_total, files_added, files_modified, files_deleted FROM task_runs
+		ORDER BY started_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var runs []*TaskRun
+	for rows.Next() {
+		r := &TaskRun{}
+		if err := rows.Scan(&r.ID, &r.ModuleType, &r.ConfigID, &r.ConfigUID, &r.StartedAt, &r.FinishedAt,
 			&r.Status, &r.ErrorSummary, &r.FilesTotal, &r.FilesAdded, &r.FilesModified, &r.FilesDeleted); err != nil {
 			return nil, err
 		}

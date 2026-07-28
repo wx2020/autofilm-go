@@ -260,13 +260,14 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 			Cron:    config.Cron,
 		}
 		entry.RunFunc = func() {
-			ctx := context.Background()
-			a2s, err := alist2strm.New(config)
+			err := web.TrackRun(string(web.ModuleAlist2Strm), config.ID, func() error {
+				a2s, err := alist2strm.New(config)
+				if err != nil {
+					return err
+				}
+				return a2s.Run(context.Background())
+			})
 			if err != nil {
-				logger.Errorf("创建Alist2Strm实例失败: %v", err)
-				return
-			}
-			if err := a2s.Run(ctx); err != nil {
 				logger.Errorf("Alist2Strm运行失败: %v", err)
 			}
 		}
@@ -323,13 +324,14 @@ func addAni2AlistJobs(c *cron.Cron) error {
 			Cron:    config.Cron,
 		}
 		entry.RunFunc = func() {
-			ctx := context.Background()
-			a2a, err := ani2alist.New(config)
+			err := web.TrackRun(string(web.ModuleAni2Alist), config.ID, func() error {
+				a2a, err := ani2alist.New(config)
+				if err != nil {
+					return err
+				}
+				return a2a.Run(context.Background())
+			})
 			if err != nil {
-				logger.Errorf("创建Ani2Alist实例失败: %v", err)
-				return
-			}
-			if err := a2a.Run(ctx); err != nil {
 				logger.Errorf("Ani2Alist运行失败: %v", err)
 			}
 		}
@@ -386,13 +388,14 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 			Cron:    config.Cron,
 		}
 		entry.RunFunc = func() {
-			ctx := context.Background()
-			lp, err := libraryposter.New(config)
+			err := web.TrackRun(string(web.ModuleLibraryPoster), config.ID, func() error {
+				lp, err := libraryposter.New(config)
+				if err != nil {
+					return err
+				}
+				return lp.Run(context.Background())
+			})
 			if err != nil {
-				logger.Errorf("创建LibraryPoster实例失败: %v", err)
-				return
-			}
-			if err := lp.Run(ctx); err != nil {
 				logger.Errorf("LibraryPoster运行失败: %v", err)
 			}
 		}
@@ -449,14 +452,15 @@ func addAlistSyncJobs(c *cron.Cron) error {
 			Cron:    config.Cron,
 		}
 		entry.RunFunc = func() {
-			ctx := context.Background()
-			syncer, err := alissync.New(config)
+			err := web.TrackRun(string(web.ModuleAlissync), config.ID, func() error {
+				syncer, err := alissync.New(config)
+				if err != nil {
+					return err
+				}
+				alissyncDaemons = append(alissyncDaemons, syncer.Daemon())
+				return syncer.Run(context.Background())
+			})
 			if err != nil {
-				logger.Errorf("创建AlistSync实例失败: %v", err)
-				return
-			}
-			alissyncDaemons = append(alissyncDaemons, syncer.Daemon())
-			if err := syncer.Run(ctx); err != nil {
 				logger.Errorf("AlistSync运行失败: %v", err)
 			}
 		}

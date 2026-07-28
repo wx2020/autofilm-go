@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -95,6 +94,7 @@ func (qm *QueueManager) LoadByState(state string) ([]*SyncTask, error) {
 func (qm *QueueManager) dbSave(store *storage.Store, task *SyncTask) error {
 	return store.UpsertSyncTask(&storage.SyncTaskRow{
 		SyncConfigID: 0,
+		ConfigUID:    task.SyncConfigID,
 		SrcPath:      task.SrcPath,
 		DstPath:      task.DstPath,
 		State:        task.State,
@@ -124,7 +124,7 @@ func (qm *QueueManager) dbLoadAll(store *storage.Store) ([]*SyncTask, error) {
 func syncTaskRowToTask(r *storage.SyncTaskRow) *SyncTask {
 	t := &SyncTask{
 		ID:           r.DstPath,
-		SyncConfigID: strconv.FormatInt(r.SyncConfigID, 10),
+		SyncConfigID: r.ConfigUID,
 		SrcPath:      r.SrcPath,
 		DstPath:      r.DstPath,
 		State:        r.State,

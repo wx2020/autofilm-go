@@ -21,7 +21,14 @@ window.fetch = (input, init = {}) => {
     headers.set('Authorization', `Bearer ${token}`)
     init = { ...init, headers }
   }
-  return nativeFetch(input, init)
+  return nativeFetch(input, init).then(response => {
+    if (response.status === 401 && !url.startsWith('/api/auth/')) {
+      sessionStorage.removeItem('autofilm_token')
+      sessionStorage.removeItem('autofilm_user')
+      if (location.pathname !== '/login') location.assign('/login')
+    }
+    return response
+  })
 }
 
 createApp(App).use(router).mount('#app')

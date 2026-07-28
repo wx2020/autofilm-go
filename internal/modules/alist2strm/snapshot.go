@@ -86,14 +86,7 @@ func SaveSnapshot(id, cacheDir string, snap *Snapshot) error {
 }
 
 func dbLoadSnapshot(store *storage.Store, cfgID string) (*Snapshot, error) {
-	// 查找 config_id
-	var configID int64
-	err := store.QueryRow("SELECT id FROM alist2strm_configs WHERE cfg_id = ?", cfgID).Scan(&configID)
-	if err != nil {
-		return nil, nil
-	}
-
-	entries, err := store.LoadSnapshot(configID)
+	entries, err := store.LoadSnapshotByUID(cfgID)
 	if err != nil {
 		return nil, err
 	}
@@ -113,17 +106,9 @@ func dbLoadSnapshot(store *storage.Store, cfgID string) (*Snapshot, error) {
 }
 
 func dbSaveSnapshot(store *storage.Store, cfgID string, snap *Snapshot) error {
-	// 查找 config_id
-	var configID int64
-	err := store.QueryRow("SELECT id FROM alist2strm_configs WHERE cfg_id = ?", cfgID).Scan(&configID)
-	if err != nil {
-		return err
-	}
-
 	var entries []storage.SnapshotEntry
 	for path, fe := range snap.Files {
 		entries = append(entries, storage.SnapshotEntry{
-			ConfigID: configID,
 			Path:     path,
 			Size:     fe.Size,
 			Modified: fe.Modified,
@@ -131,7 +116,7 @@ func dbSaveSnapshot(store *storage.Store, cfgID string, snap *Snapshot) error {
 		})
 	}
 
-	return store.SaveSnapshot(configID, entries)
+	return store.SaveSnapshotByUID(cfgID, entries)
 }
 
 func fileLoadSnapshot(id, cacheDir string) (*Snapshot, error) {

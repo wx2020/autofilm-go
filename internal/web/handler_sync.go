@@ -1,83 +1,56 @@
 package web
 
 import (
-	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
+	"strconv"
+	"time"
 
-	"github.com/akimio/autofilm/internal/core"
+	"github.com/akimio/autofilm/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
-// handleGetSyncQueue GET /api/sync/queue
-func (s *Server) handleGetSyncQueue(w http.ResponseWriter, r *http.Request) {
-	queueDir := filepath.Join(core.GetSettings().GetDataDir(), "sync_queue")
-	entries, err := os.ReadDir(queueDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			json.NewEncoder(w).Encode([]interface{}{})
-			return
-		}
-		http.Error(w, `{"error":"读取队列失败"}`, http.StatusInternalServerError)
+func (s *Server) handleGetSyncQueue(w http.ResponseWriter, _ *http.Request) {
+	store := storage.GlobalStore()
+	if store == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "数据库不可用")
 		return
 	}
-
-	var tasks []map[string]interface{}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(queueDir, entry.Name()))
-		if err != nil {
-			continue
-		}
-		var task map[string]interface{}
-		if err := json.Unmarshal(data, &task); err != nil {
-			continue
-		}
-		tasks = append(tasks, task)
+	tasks, err := store.ListAllSyncTasks()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-
-	json.NewEncoder(w).Encode(tasks)
+	writeJSON(w, http.StatusOK, tasks)
 }
 
-// handleRetrySyncTask POST /api/sync/queue/retry/{tid}
 func (s *Server) handleRetrySyncTask(w http.ResponseWriter, r *http.Request) {
-	tid := chi.URLParam(r, "tid")
-	if tid == "" {
-		http.Error(w, `{"error":"缺少任务ID"}`, http.StatusBadRequest)
-		return
-	}
-
-	// 从队列目录读取任务 JSON，将 state 改为 "failed" 以便守护协程重试
-	queueDir := filepath.Join(core.GetSettings().GetDataDir(), "sync_queue")
-	taskPath := filepath.Join(queueDir, tid+".json")
-
-	data, err := os.ReadFile(taskPath)
+	id, err := strconv.ParseInt(chi.URLParam(r, "tid"), 10, 64)
 	if err != nil {
-		http.Error(w, `{"error":"任务未找到"}`, http.StatusNotFound)
+		writeJSONError(w, http.StatusBadRequest, "任务 ID 无效")
 		return
 	}
-
-	var task map[string]interface{}
-	if err := json.Unmarshal(data, &task); err != nil {
-		http.Error(w, `{"error":"解析任务失败"}`, http.StatusInternalServerError)
+	store := storage.GlobalStore()
+	task, err := store.GetSyncTaskByID(id)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, "任务未找到")
 		return
 	}
+	task.State = "failed"
+	task.LastError = "手动触发重试"
+	now := time.Now()
+	task.NextRetryAt = &now
+	if err := store.UpdateSyncTask(task); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
 
-	task["state"] = "failed"
-	task["last_error"] = "手动触发重试"
-
-	// 原子写入
-	tmpPath := taskPath + ".tmp"
-	updated, _ := json.MarshalIndent(task, "", "  ")
-	os.WriteFile(tmpPath, updated, 0644)
-	os.Rename(tmpPath, taskPath)
-
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "任务已加入重试队列",
-	})
+func (s *Server) handleTaskRuns(w http.ResponseWriter, _ *http.Request) {
+	runs, err := storage.GlobalStore().ListRecentTaskRuns(200)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runs)
 }

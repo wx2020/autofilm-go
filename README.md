@@ -1,187 +1,91 @@
 # AutoFilm Go
 
-AutoFilm 的 Go 语言重写版本，提供与 Python 版本相同的功能，但具有更好的性能和更小的资源占用。
+AutoFilm 的 Go 实现：将 Alist/OpenList 媒体生成 STRM，维护动漫挂载、云端同步和 Jellyfin/Emby 媒体库海报，并提供完整 Web 管理界面。
 
-## 功能特性
+## 功能
 
-- **Alist2Strm**: 将 Alist 云存储中的媒体文件转换为 .strm 文件，支持 Emby/Jellyfin 直链播放
-- **Ani2Alist**: 集成 ANI Open 项目，自动挂载动漫内容到 Alist
-- **LibraryPoster**: 自动生成和更新媒体库海报
+- **Alist2Strm**：全量/增量扫描、STRM、字幕/图片/NFO、BDMV、并发与 QPS、智能删除保护
+- **Ani2Alist**：ANI Open 数据与 RSS 更新、季度和关键词过滤
+- **AlistSync**：多目录对、覆盖策略、SQLite 任务队列、指数退避和 dead letter
+- **LibraryPoster**：1200×1800 拼图、主视觉、标题/副标题、自定义 TTF 字体
+- **Web 管理**：选项化配置、任务执行、日志、监控、告警、用户与备份
+- **安全**：AES-GCM 凭据加密，管理员/操作员/只读用户 RBAC，24 小时会话
+- **运维**：SQLite、Prometheus `/metrics`、Webhook、Docker、单二进制部署
 
 ## 快速开始
 
-### 使用 Docker
+### Docker Compose
 
 ```bash
-docker run -d \
-  --name autofilm \
-  -v ./config:/config \
-  -v ./logs:/logs \
-  -v ./fonts:/fonts:ro \
-  -v ./media:/media \
-  -e TZ=Asia/Shanghai \
-  akimio/autofilm-go:latest
+docker compose up -d
 ```
 
-### 使用 Docker Compose
+访问 `http://localhost:8080`，首次打开时创建管理员账户。容器默认通过 `AUTOFILM_WEB_HOST=0.0.0.0` 监听。
+
+### 本地构建
 
 ```bash
-docker-compose up -d
-```
-
-### 本地运行
-
-```bash
-# 安装依赖
-go mod download
-
-# 构建
+cd webui
+npm ci
+npm run build
+cd ..
 go build -o autofilm ./cmd/autofilm
-
-# 运行
 ./autofilm
 ```
 
-启动后访问 `http://127.0.0.1:8080`。生产构建会将 Vue WebUI 嵌入 Go
-二进制，因此运行时不需要单独复制 `webui` 或 `dist` 目录。
+Vue 生产资源使用 `go:embed` 打入二进制，正式运行不需要 Node.js 或 npm。
 
-Web 服务可在管理界面的“系统设置”中配置。系统设置和四类模块配置均
-保存在 `/data/autofilm.db`（本地运行时为可执行文件旁的 `data` 目录），
-不需要手工维护 YAML。
+## 配置与数据
 
-Docker Compose 已通过 `AUTOFILM_WEB_HOST=0.0.0.0` 开放容器监听地址。
-对外提供服务时建议设置 `AUTOFILM_WEB_TOKEN`，之后使用
-`http://host:8080/?token=你的令牌` 首次打开管理界面。
+系统和模块配置保存在 `data/autofilm.db`，凭据使用 `data/.db_key` 加密。旧版 `config.yaml` 仅在数据库为空时自动导入一次，之后不参与运行。
 
-## 配置
+WebUI 中可以：
 
-打开 Web 管理界面，在对应模块页面新增、编辑或删除配置。保存后会自动
-重建定时任务。旧版本的 `config.yaml` 会在数据库为空时自动导入一次，
-导入后不再参与运行。
+- 新增、编辑、删除四类模块配置
+- 测试 Alist/OpenList 连接
+- 设置时区、监听地址、端口、Token 和告警 Webhook
+- 创建管理员、操作员和只读用户
+- 下载或恢复逻辑配置备份
 
-### Alist2Strm 配置
+环境变量：
 
-```yaml
-Alist2StrmList:
-  - id: "my-server"
-    url: "http://localhost:5244"
-    username: ""
-    password: ""
-    token: ""
-    public_url: ""
-    source_dir: "/"
-    target_dir: "/media"
-    flatten_mode: false
-    subtitle: false
-    image: false
-    nfo: false
-    mode: "AlistURL"
-    overwrite: false
-    max_workers: 50
-    max_downloaders: 5
-    sync_server: false
-    smart_protection:
-      enabled: true
-      threshold: 100
-      grace_scans: 3
-    cron: "0 */6 * * *"
+| 变量 | 用途 |
+|---|---|
+| `AUTOFILM_WEB_HOST` | 覆盖监听地址 |
+| `AUTOFILM_WEB_PORT` | 覆盖监听端口 |
+| `AUTOFILM_WEB_ENABLED` | 启用或禁用 Web |
+| `AUTOFILM_WEB_TOKEN` | 首次创建用户前的兼容 Token |
+| `AUTOFILM_DB_KEY` | Base64 编码的 32 字节数据库加密密钥 |
+
+## 权限
+
+| 角色 | 权限 |
+|---|---|
+| `admin` | 系统设置、用户、备份恢复和全部操作 |
+| `operator` | 配置模块、执行任务、重试和确认告警 |
+| `viewer` | 查看状态、日志、运行记录和告警 |
+
+## 监控与告警
+
+- Prometheus：`GET /metrics`
+- Web 指标：`GET /api/metrics`
+- 任务失败会写入 SQLite 告警表
+- 配置告警 Webhook 后会 POST：
+
+```json
+{"level":"error","source":"alist2strm:movies","message":"错误信息"}
 ```
 
-### Ani2Alist 配置
-
-```yaml
-Ani2AlistList:
-  - id: "anime"
-    url: "http://localhost:5244"
-    username: ""
-    password: ""
-    token: ""
-    target_dir: "/Anime"
-    rss_update: true
-    src_domain: "aniopen.an-i.workers.dev"
-    rss_domain: "api.ani.rip"
-    cron: "0 */12 * * *"
-```
-
-### LibraryPoster 配置
-
-```yaml
-LibraryPosterList:
-  - id: "poster"
-    url: "http://localhost:8096"
-    api_key: "your-api-key"
-    title_font_path: "/fonts/title.ttf"
-    subtitle_font_path: "/fonts/subtitle.ttf"
-    configs:
-      - library_name: "Movies"
-        title: "电影"
-        subtitle: "Movie Library"
-        limit: 15
-    cron: "0 4 * * *"
-```
-
-## 模式说明
-
-### Alist2Strm 模式
-
-- **AlistURL**: 使用 Alist 下载链接（默认）
-- **RawURL**: 使用原始直链
-- **AlistPath**: 使用 Alist 路径
-
-## 项目结构
-
-```
-autofilm-go/
-├── cmd/
-│   └── autofilm/          # 主程序入口
-├── internal/
-│   ├── core/              # 核心模块（配置、日志）
-│   ├── extensions/        # 扩展（文件类型、Logo）
-│   ├── modules/           # 功能模块
-│   │   ├── alist2strm/    # Alist转STRM
-│   │   ├── ani2alist/     # ANI转Alist
-│   │   └── libraryposter/ # 库海报生成
-│   └── utils/             # 工具函数
-├── pkg/                   # 公共包
-│   ├── alist/             # Alist客户端
-│   └── httpclient/        # HTTP客户端
-├── config/                # 配置文件目录
-├── logs/                  # 日志文件目录
-├── fonts/                 # 字体文件目录
-└── Dockerfile             # Docker构建文件
-```
-
-## 性能优势
-
-相比 Python 版本：
-
-- **更低的内存占用**: 约 30-50 MB vs 200-300 MB
-- **更快的启动速度**: 毫秒级 vs 秒级
-- **更好的并发性能**: 原生 goroutine 支持
-- **更小的镜像体积**: 约 20 MB vs 300+ MB
-
-## 开发
+## 开发验证
 
 ```bash
-# 格式化代码
 go fmt ./...
-
-# 运行测试
 go test ./...
-
-# 构建前端（修改 webui 后执行）
-cd webui && npm ci && npm run build
-
-# 构建多平台版本
-GOOS=linux GOARCH=amd64 go build -o autofilm-linux-amd64 ./cmd/autofilm
-GOOS=windows GOARCH=amd64 go build -o autofilm-windows-amd64.exe ./cmd/autofilm
-GOOS=darwin GOARCH=amd64 go build -o autofilm-darwin-amd64 ./cmd/autofilm
+go vet ./...
 ```
+
+当前测试覆盖数据库迁移回放、旧 YAML 导入、AES-GCM、密码哈希、配置密文、快照 diff、同步覆盖和退避、海报生成、Web 参数校验、嵌入 SPA 和 Prometheus 指标。
 
 ## 许可证
 
-MIT License
-
-## 致谢
-
-本项目基于 [AutoFilm](https://github.com/akimio/AutoFilm) Python 版本重写。
+MIT

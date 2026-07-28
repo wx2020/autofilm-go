@@ -6,6 +6,8 @@
       <table class="table table-hover">
         <thead>
           <tr>
+            <th>任务 ID</th>
+            <th>配置 ID</th>
             <th>源路径</th>
             <th>目标路径</th>
             <th>状态</th>
@@ -16,6 +18,8 @@
         </thead>
         <tbody>
           <tr v-for="t in tasks" :key="t.id">
+            <td>{{ t.id }}</td>
+            <td>{{ t.config_uid || t.sync_config_id || '-' }}</td>
             <td class="text-truncate" style="max-width:200px">{{ t.src_path }}</td>
             <td class="text-truncate" style="max-width:200px">{{ t.dst_path }}</td>
             <td>
@@ -64,10 +68,17 @@ async function load() {
       fetch('/api/sync/queue'),
       fetch('/api/modules')
     ])
-    tasks.value = await tRes.json()
+    if (!tRes.ok) throw new Error((await tRes.json().catch(() => ({}))).error || '同步队列读取失败')
+    if (!mRes.ok) throw new Error((await mRes.json().catch(() => ({}))).error || '模块读取失败')
+    const queue = await tRes.json()
     const all = await mRes.json()
-    syncModules.value = all.filter(m => m.type === 'alissync')
-  } catch (e) { console.error(e) }
+    tasks.value = Array.isArray(queue) ? queue : []
+    syncModules.value = Array.isArray(all) ? all.filter(m => m.type === 'alissync') : []
+  } catch (e) {
+    tasks.value = []
+    syncModules.value = []
+    console.error(e)
+  }
 }
 
 async function retry(tid) {

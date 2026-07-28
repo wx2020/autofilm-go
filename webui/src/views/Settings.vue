@@ -45,6 +45,10 @@
           <input v-model="form.web_token" type="password" class="form-control" autocomplete="new-password" placeholder="留空表示不启用 API 鉴权">
           <div class="form-text">监听 0.0.0.0 时强烈建议设置。可通过 <code>?token=令牌</code> 首次进入界面。</div>
         </div>
+        <div class="col-12">
+          <label class="form-label">告警 Webhook</label>
+          <input v-model="form.alert_webhook" type="url" class="form-control" placeholder="任务失败时 POST JSON，可留空">
+        </div>
       </div>
 
       <div class="card-footer d-flex align-items-center gap-3">
@@ -59,7 +63,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 
-const form = reactive({ debug: false, timezone: 'Asia/Shanghai', web_enabled: true, web_host: '127.0.0.1', web_port: 8080, web_token: '' })
+const form = reactive({ debug: false, timezone: 'Asia/Shanghai', web_enabled: true, web_host: '127.0.0.1', web_port: 8080, web_token: '', alert_webhook: '' })
 const saving = ref(false)
 const message = ref('')
 const error = ref(false)

@@ -285,9 +285,10 @@ func (lp *LibraryPoster) processLibrary(ctx context.Context, library Library, co
 
 	lp.logger.Infof("获取到 %d 张海报图片", len(images))
 
-	// 处理海报（简化版：使用第一张图片作为封面）
-	// 完整的海报拼接功能需要使用更复杂的图像处理库
-	posterData := images[0]
+	posterData, err := composePoster(images, config, lp.config.TitleFontPath, lp.config.SubtitleFontPath)
+	if err != nil {
+		return fmt.Errorf("生成媒体库海报失败: %w", err)
+	}
 
 	// 更新媒体库图片
 	if err := lp.updateLibraryImage(ctx, library, posterData); err != nil {

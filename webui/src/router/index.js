@@ -6,6 +6,9 @@ import LibraryPoster from '../views/LibraryPoster.vue'
 import Sync from '../views/Sync.vue'
 import Settings from '../views/Settings.vue'
 import Logs from '../views/Logs.vue'
+import Login from '../views/Login.vue'
+import Admin from '../views/Admin.vue'
+import Monitoring from '../views/Monitoring.vue'
 
 const routes = [
   { path: '/', name: 'Overview', component: Overview },
@@ -15,9 +18,22 @@ const routes = [
   { path: '/sync', name: 'Sync', component: Sync },
   { path: '/settings', name: 'Settings', component: Settings },
   { path: '/logs', name: 'Logs', component: Logs },
+  { path: '/monitoring', name: 'Monitoring', component: Monitoring },
+  { path: '/admin', name: 'Admin', component: Admin },
+  { path: '/login', name: 'Login', component: Login, meta: { public: true } },
 ]
 
-export default createRouter({
+const router = createRouter({
   history: createWebHistory(),
   routes,
 })
+
+router.beforeEach(async (to) => {
+  if (to.meta.public) return true
+  const status = await fetch('/api/auth/status').then(r => r.json()).catch(() => ({ initialized: false }))
+  if (!status.initialized) return '/login'
+  if (status.initialized && !sessionStorage.getItem('autofilm_token')) return '/login'
+  return true
+})
+
+export default router
