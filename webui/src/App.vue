@@ -36,7 +36,7 @@ const router = useRouter()
 const user = ref(JSON.parse(sessionStorage.getItem('autofilm_user') || 'null'))
 
 fetch('/api/health').then(r => r.json()).then(d => {
-  if (d.version) version.value = d.version
+  if (d.version) version.value = d.version.replace(/^v/i, '')
 }).catch(() => {})
 
 const allNavItems = [

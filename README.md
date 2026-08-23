@@ -7,7 +7,7 @@ AutoFilm 是一个 Go 实现的媒体自动化工具，提供 Alist/OpenList 媒
 - **Alist2Strm**：扫描 Alist/OpenList 媒体目录并生成 STRM，支持增量扫描、字幕/图片/NFO、并发、QPS 限制和智能删除保护。
 - **Ani2Alist**：根据 ANI Open 数据或 RSS 更新 Alist 目录结构，支持季度、关键词和 RSS 模式。
 - **AlistSync**：同步多个 Alist/OpenList 目录对，支持 `never`、`always`、`if_newer` 覆盖策略、任务队列和失败重试。
-- **FileMove**：递归扫描本地目录，按相对路径正则和文件大小筛选文件，定时移动并保留目录结构。
+- **FileMove**：递归扫描本地或 OpenList 目录，按正则和文件大小匹配文件，支持定时移动、平铺移动、正则重命名以及安全删除已处理的源子目录。
 - **LibraryPoster**：从 Jellyfin/Emby 媒体库生成拼图海报，支持自定义标题、副标题和 TTF 字体。
 - **Web 管理**：模块配置、手动执行、启停任务、日志、监控、告警、用户权限和备份恢复。
 
@@ -60,12 +60,12 @@ WebUI 支持配置以下模块：
 - `/alist2strm`
 - `/ani2alist`
 - `/libraryposter`
-- `/sync`
+- `/alistsync`
 - `/filemove`
 
 ### FileMove 配置
 
-FileMove 用于将本地源目录中的文件递归移动到目标目录。正则表达式匹配源目录下使用 `/` 分隔的相对路径；移动后会保留相对目录结构。
+FileMove 用于将本地或 OpenList 源目录中的文件递归移动到目标目录。正则表达式匹配源目录下使用 `/` 分隔的相对路径；默认保留相对目录结构，也可以通过 `flatten` 平铺到目标目录。
 
 示例：
 
@@ -106,7 +106,7 @@ FileMoveList:
 | `overwrite` | 是否覆盖目标中的同名文件，默认 `false` |
 | `cron` | 定时表达式，支持秒字段 |
 
-FileMove 默认跳过符号链接和非普通文件。跨文件系统移动时会先复制到目标目录的临时文件，完成后再删除源文件。
+FileMove 默认跳过符号链接和非普通文件。跨文件系统移动时会先复制到目标目录的临时文件，完成后再删除源文件。启用 `remove_matched_dirs` 后，仅当目录内所有匹配文件均成功移动时才会删除该源子目录；匹配文件移动失败或跳过时会保留目录。删除目录时，其中未匹配的下载垃圾文件也会一并删除，源根目录不会删除。
 
 设置 `rename_regex` 后，FileMove 会在移动前对文件名执行正则替换，不修改目录名。例如 `hhd880.com@ipx111-c.mp4` 配置 `rename_regex: "^hhd880\\.com@"`、`rename_replacement: ""` 后会以 `ipx111-c.mp4` 移动。
 
