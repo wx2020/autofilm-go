@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -140,8 +141,8 @@ func validateModuleConfig(typ string, cfg map[string]interface{}) error {
 			}
 		}
 		for _, key := range []string{"size", "min_size", "max_size"} {
-			if value, exists := cfg[key]; exists && value != nil && fmt.Sprint(value) != "" {
-				if n, err := strconv.ParseInt(fmt.Sprint(value), 10, 64); err != nil || n < 0 {
+			if value, exists := cfg[key]; exists && value != nil && strings.TrimSpace(fmt.Sprint(value)) != "" {
+				if _, ok := parseNonNegativeInt64(value); !ok {
 					return fmt.Errorf("%s must be a non-negative integer (bytes)", key)
 				}
 			}
@@ -153,6 +154,25 @@ func validateModuleConfig(typ string, cfg map[string]interface{}) error {
 		}
 	}
 	return nil
+}
+
+func parseNonNegativeInt64(value interface{}) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), v >= 0
+	case int64:
+		return v, v >= 0
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v != math.Trunc(v) || v >= 9223372036854775808 {
+			return 0, false
+		}
+		return int64(v), true
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		return n, err == nil && n >= 0
+	default:
+		return 0, false
+	}
 }
 
 func parseConfigInt64(value interface{}) int64 {

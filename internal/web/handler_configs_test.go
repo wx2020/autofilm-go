@@ -32,6 +32,10 @@ func TestValidateFileMoveConfig(t *testing.T) {
 	if err := validateModuleConfig("filemove", valid); err != nil {
 		t.Fatal(err)
 	}
+	valid["min_size"] = float64(1073741824)
+	if err := validateModuleConfig("filemove", valid); err != nil {
+		t.Fatalf("large byte size rejected: %v", err)
+	}
 
 	invalidRegex := map[string]interface{}{
 		"id": "local-move", "cron": "0 0 * * * *",
