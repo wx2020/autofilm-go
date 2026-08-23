@@ -48,6 +48,7 @@
             <Field label="精确大小（字节，可选）" class="col-md-4"><input v-model.number="form.size" type="number" min="0" class="form-control" placeholder="不限制"></Field>
             <Field label="最小大小（字节）" class="col-md-4"><input v-model.number="form.min_size" type="number" min="0" class="form-control"></Field>
             <Field label="最大大小（字节，0 不限制）" class="col-md-4"><input v-model.number="form.max_size" type="number" min="0" class="form-control"></Field>
+            <Switch v-model="form.flatten" label="平铺移动（不保留目录）" />
             <Switch v-model="form.overwrite" label="目标存在时覆盖" />
             <div class="col-12"><div class="form-text">文件会保留源目录下的相对目录结构；默认不覆盖目标中的同名文件。</div></div>
           </div>
@@ -134,7 +135,7 @@ const Switch = defineComponent({ inheritAttrs:false, props:{modelValue:Boolean,l
 const props=defineProps({type:{type:String,required:true},defaults:{type:Object,required:true}}); const emit=defineEmits(['changed'])
 const configs=ref([]),editing=ref(false),loading=ref(false),saving=ref(false),testing=ref(false),form=ref({}),originalID=ref(''),message=ref(''),error=ref(false)
 const clone=v=>JSON.parse(JSON.stringify(v))
-function normalize(v){const x=clone(v); x.smart_protection ||= {enabled:true,threshold:100,grace_scans:3}; x.configs ||= []; x.pairs ||= []; x.retry ||= {max_attempts:10,backoff:'expo',jitter:.2}; if(props.type==='filemove'){x.backend ??= 'local'; x.regex ??= ''; x.size ??= null; x.min_size ??= 0; x.max_size ??= 0; x.overwrite ??= false} return x}
+function normalize(v){const x=clone(v); x.smart_protection ||= {enabled:true,threshold:100,grace_scans:3}; x.configs ||= []; x.pairs ||= []; x.retry ||= {max_attempts:10,backoff:'expo',jitter:.2}; if(props.type==='filemove'){x.backend ??= 'local'; x.regex ??= ''; x.size ??= null; x.min_size ??= 0; x.max_size ??= 0; x.flatten ??= false; x.overwrite ??= false} return x}
 async function request(url,options){const res=await fetch(url,options),body=await res.json().catch(()=>({}));if(!res.ok)throw new Error(body.error||`请求失败 (${res.status})`);return body}
 async function load(){loading.value=true;try{configs.value=await request(`/api/configs/${props.type}`)}catch(e){show(e.message,true)}finally{loading.value=false}}
 function createConfig(){originalID.value='';form.value=normalize(props.defaults);editing.value=true;message.value=''}

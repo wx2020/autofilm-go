@@ -75,6 +75,31 @@ func TestMoveExactSizeAndSkipsExistingDestination(t *testing.T) {
 	}
 }
 
+func TestMoveFlattenPreservesOnlyFileName(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	target := filepath.Join(root, "target")
+	if err := os.MkdirAll(filepath.Join(source, "nested", "deep"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(source, "nested", "deep", "movie.mkv"), "movie")
+
+	mover, err := New(&Config{SourceDir: source, TargetDir: target, Flatten: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := mover.Move(context.Background())
+	if err != nil || report.Moved != 1 {
+		t.Fatalf("flatten move failed: report=%+v err=%v", report, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "movie.mkv")); err != nil {
+		t.Fatalf("flattened file was not moved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "nested", "deep", "movie.mkv")); !os.IsNotExist(err) {
+		t.Fatalf("flattened file retained source directories")
+	}
+}
+
 func TestNewRejectsTargetInsideSource(t *testing.T) {
 	root := t.TempDir()
 	_, err := New(&Config{

@@ -562,6 +562,7 @@ func parseFileMoveConfig(m map[string]interface{}) (*filemove.Config, error) {
 		MinSize:    getInt64(m, "min_size"),
 		MaxSize:    getInt64(m, "max_size"),
 		Overwrite:  getBool(m, "overwrite"),
+		Flatten:    getBool(m, "flatten"),
 		Cron:       getString(m, "cron"),
 		Backend:    getString(m, "backend"),
 		URL:        getString(m, "url"),

@@ -29,6 +29,7 @@ type Config struct {
 	MinSize    int64
 	MaxSize    int64
 	Overwrite  bool
+	Flatten    bool
 	Cron       string
 	Backend    string
 	URL        string
@@ -194,7 +195,11 @@ func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
 		}
 		report.Matched++
 
-		destination := filepath.Join(m.targetDir, rel)
+		destinationRel := rel
+		if m.config.Flatten {
+			destinationRel = filepath.Base(rel)
+		}
+		destination := filepath.Join(m.targetDir, destinationRel)
 		if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 			report.Errors = append(report.Errors, fmt.Errorf("create parent for %s: %w", destination, err))
 			return nil
@@ -237,7 +242,11 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			continue
 		}
 		report.Matched++
-		destination := joinRemotePath(targetDir, rel)
+		destinationRel := rel
+		if m.config.Flatten {
+			destinationRel = pathBase(rel)
+		}
+		destination := joinRemotePath(targetDir, destinationRel)
 		if existing, err := m.client.FSGet(ctx, destination); err == nil && existing != nil {
 			if !m.config.Overwrite {
 				report.Skipped++
