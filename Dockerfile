@@ -8,7 +8,7 @@ FROM node:${NODE_VERSION}-alpine AS web-builder
 
 WORKDIR /build/webui
 COPY webui/package.json webui/pnpm-lock.yaml ./
-RUN corepack enable && pnpm install --frozen-lockfile
+RUN npm install --global pnpm@9.15.9 && pnpm install --frozen-lockfile
 COPY webui/ .
 RUN pnpm run build
 
