@@ -38,7 +38,11 @@ const props = defineProps({
 defineEmits(['run', 'toggle'])
 
 const nextRun = computed(() => props.module.next_run ? new Date(props.module.next_run) : null)
-const lastRun = computed(() => props.module.last_run ? new Date(props.module.last_run) : null)
+const lastRun = computed(() => {
+  const value = props.module.last_run
+  if (!value || value.startsWith('0001-01-01')) return null
+  return new Date(value)
+})
 const lastError = computed(() => props.module.last_error)
 
 function formatTime(d) {
