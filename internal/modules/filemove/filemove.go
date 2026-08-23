@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -34,6 +35,7 @@ type Config struct {
 	Flatten           bool
 	RenameRegex       string
 	RenameReplacement string
+	RemoveMatchedDirs bool
 	Cron              string
 	Backend           string
 	URL               string
@@ -98,12 +100,13 @@ func ParseSize(value interface{}) (int64, error) {
 
 // MoveReport contains the result of one scan.
 type MoveReport struct {
-	Scanned int
-	Matched int
-	Moved   int
-	Renamed int
-	Skipped int
-	Errors  []error
+	Scanned     int
+	Matched     int
+	Moved       int
+	Renamed     int
+	Skipped     int
+	RemovedDirs int
+	Errors      []error
 }
 
 // Error returns all per-file errors as one error.
@@ -215,6 +218,8 @@ func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
 		return m.moveOpenList(ctx)
 	}
 	var report MoveReport
+	matchedDirs := map[string]int{}
+	movedDirs := map[string]int{}
 
 	if err := ctx.Err(); err != nil {
 		return report, err
@@ -285,6 +290,7 @@ func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
 			return nil
 		}
 		report.Matched++
+		matchedDirs[filepath.Dir(path)]++
 
 		destinationRel := rel
 		if m.config.Flatten {
@@ -304,10 +310,18 @@ func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
 			return nil
 		}
 		report.Moved++
+		movedDirs[filepath.Dir(path)]++
 		return nil
 	})
 	if err != nil {
 		return report, err
+	}
+	if m.config.RemoveMatchedDirs {
+		removed, cleanupErr := removeMatchedLocalDirs(m.sourceDir, matchedDirs, movedDirs)
+		report.RemovedDirs += removed
+		if cleanupErr != nil {
+			report.Errors = append(report.Errors, cleanupErr)
+		}
 	}
 	return report, report.Error()
 }
@@ -320,6 +334,8 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 	if err != nil {
 		return report, fmt.Errorf("list OpenList source_dir: %w", err)
 	}
+	matchedDirs := map[string]int{}
+	movedDirs := map[string]int{}
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
 			return report, err
@@ -355,6 +371,7 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			continue
 		}
 		report.Matched++
+		matchedDirs[pathDir(file.FullPath)]++
 		destinationRel := rel
 		if m.config.Flatten {
 			destinationRel = pathBase(rel)
@@ -379,8 +396,64 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			continue
 		}
 		report.Moved++
+		movedDirs[pathDir(file.FullPath)]++
+	}
+	if m.config.RemoveMatchedDirs {
+		removed, cleanupErr := m.removeMatchedOpenListDirs(ctx, sourceDir, matchedDirs, movedDirs)
+		report.RemovedDirs += removed
+		if cleanupErr != nil {
+			report.Errors = append(report.Errors, cleanupErr)
+		}
 	}
 	return report, report.Error()
+}
+
+func removeMatchedLocalDirs(sourceDir string, matchedDirs, movedDirs map[string]int) (int, error) {
+	paths := make([]string, 0, len(matchedDirs))
+	for dir, matched := range matchedDirs {
+		if matched == 0 || movedDirs[dir] != matched {
+			continue
+		}
+		if samePath(dir, sourceDir) || !pathWithin(sourceDir, dir) {
+			continue
+		}
+		paths = append(paths, dir)
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		return strings.Count(paths[i], string(os.PathSeparator)) > strings.Count(paths[j], string(os.PathSeparator))
+	})
+	removed := 0
+	for _, dir := range paths {
+		if err := os.RemoveAll(dir); err != nil {
+			return removed, fmt.Errorf("remove matched source directory %s: %w", dir, err)
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+func (m *FileMover) removeMatchedOpenListDirs(ctx context.Context, sourceDir string, matchedDirs, movedDirs map[string]int) (int, error) {
+	paths := make([]string, 0, len(matchedDirs))
+	for dir, matched := range matchedDirs {
+		if matched == 0 || movedDirs[dir] != matched {
+			continue
+		}
+		if dir == sourceDir || !remotePathWithin(sourceDir, dir) {
+			continue
+		}
+		paths = append(paths, dir)
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		return strings.Count(paths[i], "/") > strings.Count(paths[j], "/")
+	})
+	removed := 0
+	for _, dir := range paths {
+		if err := m.client.FSRemove(ctx, pathDir(dir), []string{pathBase(dir)}); err != nil {
+			return removed, fmt.Errorf("remove matched OpenList directory %s: %w", dir, err)
+		}
+		removed++
+	}
+	return removed, nil
 }
 
 func listOpenListRecursive(ctx context.Context, client *alist.AlistClient, dir string) ([]alist.AlistPath, error) {

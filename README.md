@@ -80,6 +80,7 @@ FileMoveList:
     regex: "(?i)\\.(mkv|mp4)$"
     rename_regex: "^hhd880\\.com@" # 移动前匹配文件名
     rename_replacement: ""           # 留空表示删除匹配部分
+    remove_matched_dirs: false        # 匹配文件全部移动后删除其所在子目录
     size: null             # 精确大小；支持 1073741824、50KB、500MB、1GB
     min_size: 0            # 最小大小；0 表示不限制
     max_size: 0            # 最大大小；0 表示不限制
@@ -97,6 +98,7 @@ FileMoveList:
 | `regex` | 匹配相对路径的 Go 正则表达式，可为空 |
 | `rename_regex` | 移动前匹配文件名的 Go 正则表达式，可为空 |
 | `rename_replacement` | 重命名正则的替换文本；留空表示删除匹配部分 |
+| `remove_matched_dirs` | 是否在本次扫描完成、目录内匹配文件全部移动后删除对应源子目录；默认 `false`，目录内其他文件也会一并删除 |
 | `size` | 精确文件大小，支持字节数和 `KB`/`MB`/`GB`/`TB`，可为空 |
 | `min_size` | 最小文件大小，支持字节数和 `KB`/`MB`/`GB`/`TB`；`0` 表示不限制 |
 | `max_size` | 最大文件大小，支持字节数和 `KB`/`MB`/`GB`/`TB`；`0` 表示不限制 |

@@ -142,6 +142,69 @@ func TestMoveRenamesFileBeforeMove(t *testing.T) {
 	}
 }
 
+func TestMoveRemovesMatchedDirectoryAfterAllFilesMove(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	target := filepath.Join(root, "target")
+	dir := filepath.Join(source, "download")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(dir, "a.mp4"), "a")
+	writeTestFile(t, filepath.Join(dir, "b.mp4"), "b")
+	writeTestFile(t, filepath.Join(dir, "resume.part"), "garbage")
+
+	mover, err := New(&Config{
+		SourceDir:         source,
+		TargetDir:         target,
+		Regex:             `\.mp4$`,
+		RemoveMatchedDirs: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := mover.Move(context.Background())
+	if err != nil || report.Matched != 2 || report.Moved != 2 || report.RemovedDirs != 1 {
+		t.Fatalf("matched directory cleanup failed: report=%+v err=%v", report, err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("matched source directory was not removed: %v", err)
+	}
+	for _, name := range []string{"a.mp4", "b.mp4"} {
+		if _, err := os.Stat(filepath.Join(target, "download", name)); err != nil {
+			t.Fatalf("moved file %s is missing: %v", name, err)
+		}
+	}
+}
+
+func TestMoveKeepsMatchedDirectoryWhenOneFileFails(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	target := filepath.Join(root, "target")
+	dir := filepath.Join(source, "download")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(dir, "a.mp4"), "a")
+	writeTestFile(t, filepath.Join(dir, "b.mp4"), "b")
+	if err := os.MkdirAll(filepath.Join(target, "download"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(target, "download", "b.mp4"), "existing")
+
+	mover, err := New(&Config{SourceDir: source, TargetDir: target, Regex: `\.mp4$`, RemoveMatchedDirs: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := mover.Move(context.Background())
+	if err != nil || report.Matched != 2 || report.Moved != 1 || report.RemovedDirs != 0 {
+		t.Fatalf("failed-file cleanup guard failed: report=%+v err=%v", report, err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("matched directory was removed after a failed move: %v", err)
+	}
+}
+
 func TestNewRejectsTargetInsideSource(t *testing.T) {
 	root := t.TempDir()
 	_, err := New(&Config{
