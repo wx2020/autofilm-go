@@ -616,6 +616,20 @@ func (s *Store) ListTaskRuns(moduleType string, limit int) ([]*TaskRun, error) {
 	return runs, rows.Err()
 }
 
+// GetLatestTaskRun returns the latest run for a module configuration.
+func (s *Store) GetLatestTaskRun(moduleType, configUID string) (*TaskRun, error) {
+	r := &TaskRun{}
+	err := s.db.QueryRow(`SELECT id, module_type, config_id, config_uid, started_at, finished_at, status, error_summary,
+		files_total, files_added, files_modified, files_deleted FROM task_runs
+		WHERE module_type=? AND config_uid=? ORDER BY started_at DESC LIMIT 1`, moduleType, configUID).Scan(
+		&r.ID, &r.ModuleType, &r.ConfigID, &r.ConfigUID, &r.StartedAt, &r.FinishedAt,
+		&r.Status, &r.ErrorSummary, &r.FilesTotal, &r.FilesAdded, &r.FilesModified, &r.FilesDeleted)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
 func (s *Store) ListRecentTaskRuns(limit int) ([]*TaskRun, error) {
 	if limit < 1 || limit > 1000 {
 		limit = 100

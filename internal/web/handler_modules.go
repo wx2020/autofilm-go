@@ -5,12 +5,27 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/akimio/autofilm/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
 // handleListModules GET /api/modules
 func (s *Server) handleListModules(w http.ResponseWriter, r *http.Request) {
-	entries := GetModuleRegistry().List()
+	registered := GetModuleRegistry().List()
+	entries := make([]*ModuleEntry, 0, len(registered))
+	store := storage.GlobalStore()
+	for _, entry := range registered {
+		view := *entry
+		view.LastRun = time.Time{}
+		view.LastError = ""
+		if store != nil {
+			if run, err := store.GetLatestTaskRun(string(entry.Type), entry.ID); err == nil && run != nil {
+				view.LastRun = run.StartedAt
+				view.LastError = run.ErrorSummary
+			}
+		}
+		entries = append(entries, &view)
+	}
 	json.NewEncoder(w).Encode(entries)
 }
 
@@ -36,7 +51,6 @@ func (s *Server) handleRunModule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
-		entry.LastRun = time.Now()
 		// RunFunc 内部会处理错误日志
 		entry.RunFunc()
 	}()

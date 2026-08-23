@@ -38,11 +38,12 @@ func handlePrometheusMetrics(w http.ResponseWriter, _ *http.Request) {
 }
 
 func TrackRun(moduleType, configID string, fn func() error) error {
+	startedAt := time.Now()
 	recordRunStart(moduleType)
 	var runID int64
 	if store := storage.GlobalStore(); store != nil {
 		runID, _ = store.CreateTaskRun(&storage.TaskRun{
-			ModuleType: moduleType, ConfigUID: configID, StartedAt: time.Now(), Status: "running",
+			ModuleType: moduleType, ConfigUID: configID, StartedAt: startedAt, Status: "running",
 		})
 	}
 	err := fn()
