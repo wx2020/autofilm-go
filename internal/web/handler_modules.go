@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/akimio/autofilm/internal/storage"
@@ -12,7 +13,11 @@ import (
 // handleListModules GET /api/modules
 func (s *Server) handleListModules(w http.ResponseWriter, r *http.Request) {
 	registered := GetModuleRegistry().List()
-	entries := make([]*ModuleEntry, 0, len(registered))
+	type moduleView struct {
+		entry     *ModuleEntry
+		createdAt time.Time
+	}
+	views := make([]moduleView, 0, len(registered))
 	store := storage.GlobalStore()
 	for _, entry := range registered {
 		view := *entry
@@ -24,7 +29,27 @@ func (s *Server) handleListModules(w http.ResponseWriter, r *http.Request) {
 				view.LastError = run.ErrorSummary
 			}
 		}
-		entries = append(entries, &view)
+		createdAt := time.Time{}
+		if store != nil {
+			createdAt, _ = store.GetModuleConfigCreatedAt(string(entry.Type), entry.ID)
+		}
+		views = append(views, moduleView{entry: &view, createdAt: createdAt})
+	}
+	sort.SliceStable(views, func(i, j int) bool {
+		if views[i].createdAt.IsZero() != views[j].createdAt.IsZero() {
+			return !views[i].createdAt.IsZero()
+		}
+		if !views[i].createdAt.Equal(views[j].createdAt) {
+			return views[i].createdAt.Before(views[j].createdAt)
+		}
+		if views[i].entry.Type != views[j].entry.Type {
+			return views[i].entry.Type < views[j].entry.Type
+		}
+		return views[i].entry.ID < views[j].entry.ID
+	})
+	entries := make([]*ModuleEntry, 0, len(views))
+	for _, view := range views {
+		entries = append(entries, view.entry)
 	}
 	json.NewEncoder(w).Encode(entries)
 }

@@ -70,7 +70,7 @@ func (s *Store) SaveAppSettings(settings AppSettings) error {
 }
 
 func (s *Store) ListModuleConfigs(moduleType string) ([]map[string]interface{}, error) {
-	rows, err := s.db.Query("SELECT payload FROM module_configs WHERE module_type=? ORDER BY id", moduleType)
+	rows, err := s.db.Query("SELECT payload FROM module_configs WHERE module_type=? ORDER BY created_at, id", moduleType)
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +92,13 @@ func (s *Store) ListModuleConfigs(moduleType string) ([]map[string]interface{}, 
 		result = append(result, cfg)
 	}
 	return result, rows.Err()
+}
+
+// GetModuleConfigCreatedAt returns the database creation time of a module configuration.
+func (s *Store) GetModuleConfigCreatedAt(moduleType, configID string) (time.Time, error) {
+	var createdAt time.Time
+	err := s.db.QueryRow("SELECT created_at FROM module_configs WHERE module_type=? AND cfg_id=?", moduleType, configID).Scan(&createdAt)
+	return createdAt, err
 }
 
 func (s *Store) SaveModuleConfig(moduleType string, cfg map[string]interface{}) error {
