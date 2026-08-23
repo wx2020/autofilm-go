@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/akimio/autofilm/pkg/alist"
 )
 
 // Config describes one recursive local file move task.
@@ -28,6 +30,11 @@ type Config struct {
 	MaxSize    int64
 	Overwrite  bool
 	Cron       string
+	Backend    string
+	URL        string
+	Username   string
+	Password   string
+	Token      string
 }
 
 // MoveReport contains the result of one scan.
@@ -50,12 +57,20 @@ type FileMover struct {
 	sourceDir string
 	targetDir string
 	pattern   *regexp.Regexp
+	client    *alist.AlistClient
 }
 
 // New validates a file move configuration and creates a mover.
 func New(cfg *Config) (*FileMover, error) {
 	if cfg == nil {
 		return nil, errors.New("filemove config is nil")
+	}
+	backend := strings.ToLower(strings.TrimSpace(cfg.Backend))
+	if backend == "" {
+		backend = "local"
+	}
+	if backend != "local" && backend != "openlist" {
+		return nil, fmt.Errorf("unsupported filemove backend: %s", cfg.Backend)
 	}
 	if strings.TrimSpace(cfg.SourceDir) == "" {
 		return nil, errors.New("source_dir cannot be empty")
@@ -81,11 +96,22 @@ func New(cfg *Config) (*FileMover, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve target_dir: %w", err)
 	}
-	if samePath(sourceDir, targetDir) {
+	if backend == "local" && samePath(sourceDir, targetDir) {
 		return nil, errors.New("source_dir and target_dir must be different")
 	}
-	if pathWithin(sourceDir, targetDir) {
+	if backend == "local" && pathWithin(sourceDir, targetDir) {
 		return nil, errors.New("target_dir cannot be inside source_dir")
+	}
+	if backend == "openlist" {
+		if !strings.HasPrefix(cfg.SourceDir, "/") || !strings.HasPrefix(cfg.TargetDir, "/") {
+			return nil, errors.New("openlist source_dir and target_dir must start with /")
+		}
+		if cleanRemotePath(cfg.SourceDir) == cleanRemotePath(cfg.TargetDir) {
+			return nil, errors.New("source_dir and target_dir must be different")
+		}
+		if remotePathWithin(cfg.SourceDir, cfg.TargetDir) {
+			return nil, errors.New("target_dir cannot be inside source_dir")
+		}
 	}
 
 	var pattern *regexp.Regexp
@@ -96,18 +122,29 @@ func New(cfg *Config) (*FileMover, error) {
 		}
 	}
 
-	return &FileMover{
+	mover := &FileMover{
 		config:    *cfg,
 		sourceDir: sourceDir,
 		targetDir: targetDir,
 		pattern:   pattern,
-	}, nil
+	}
+	if backend == "openlist" {
+		client, err := alist.GetClient(cfg.URL, cfg.Username, cfg.Password, cfg.Token)
+		if err != nil {
+			return nil, fmt.Errorf("create OpenList client: %w", err)
+		}
+		mover.client = client
+	}
+	return mover, nil
 }
 
 // Move scans and moves matching files until the scan completes or ctx is
 // cancelled. A non-nil error means the scan itself failed or one or more
 // files could not be moved; successful files are still reflected in report.
 func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
+	if m.client != nil {
+		return m.moveOpenList(ctx)
+	}
 	var report MoveReport
 
 	if err := ctx.Err(); err != nil {
@@ -177,6 +214,104 @@ func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
 		return report, err
 	}
 	return report, report.Error()
+}
+
+func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
+	var report MoveReport
+	sourceDir := cleanRemotePath(m.config.SourceDir)
+	targetDir := cleanRemotePath(m.config.TargetDir)
+	files, err := listOpenListRecursive(ctx, m.client, sourceDir)
+	if err != nil {
+		return report, fmt.Errorf("list OpenList source_dir: %w", err)
+	}
+	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
+		rel := strings.TrimPrefix(file.FullPath, sourceDir+"/")
+		if sourceDir == "/" {
+			rel = strings.TrimPrefix(file.FullPath, "/")
+		}
+		report.Scanned++
+		if !m.matches(rel, file.Size) {
+			continue
+		}
+		report.Matched++
+		destination := joinRemotePath(targetDir, rel)
+		if existing, err := m.client.FSGet(ctx, destination); err == nil && existing != nil {
+			if !m.config.Overwrite {
+				report.Skipped++
+				continue
+			}
+			if err := m.client.FSRemove(ctx, pathDir(destination), []string{pathBase(destination)}); err != nil {
+				report.Errors = append(report.Errors, fmt.Errorf("remove existing %s: %w", destination, err))
+				continue
+			}
+		}
+		if err := m.client.FSMkdir(ctx, pathDir(destination)); err != nil {
+			report.Errors = append(report.Errors, fmt.Errorf("create target directory %s: %w", pathDir(destination), err))
+			continue
+		}
+		if err := m.client.FSMove(ctx, pathDir(file.FullPath), pathDir(destination), []string{pathBase(file.FullPath)}); err != nil {
+			report.Errors = append(report.Errors, fmt.Errorf("move %s to %s: %w", file.FullPath, destination, err))
+			continue
+		}
+		report.Moved++
+	}
+	return report, report.Error()
+}
+
+func listOpenListRecursive(ctx context.Context, client *alist.AlistClient, dir string) ([]alist.AlistPath, error) {
+	var result []alist.AlistPath
+	var walk func(string) error
+	walk = func(path string) error {
+		entries, err := client.FSListLight(ctx, path)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				if err := walk(entry.FullPath); err != nil {
+					return err
+				}
+			} else {
+				result = append(result, entry)
+			}
+		}
+		return nil
+	}
+	return result, walk(dir)
+}
+
+func cleanRemotePath(path string) string {
+	path = "/" + strings.Trim(path, "/")
+	if path == "//" {
+		return "/"
+	}
+	return path
+}
+
+func joinRemotePath(base, rel string) string {
+	return strings.TrimRight(cleanRemotePath(base), "/") + "/" + strings.TrimLeft(filepath.ToSlash(rel), "/")
+}
+
+func pathDir(path string) string {
+	dir := filepath.ToSlash(filepath.Dir(path))
+	if dir == "." {
+		return "/"
+	}
+	return dir
+}
+
+func pathBase(path string) string { return filepath.Base(filepath.ToSlash(path)) }
+
+func remotePathWithin(parent, child string) bool {
+	parent = strings.TrimRight(cleanRemotePath(parent), "/")
+	child = cleanRemotePath(child)
+	if parent == "/" {
+		return child != "/"
+	}
+	return parent != "" && strings.HasPrefix(child, parent+"/")
 }
 
 func (m *FileMover) matches(relativePath string, size int64) bool {

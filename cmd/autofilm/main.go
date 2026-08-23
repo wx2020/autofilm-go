@@ -563,6 +563,11 @@ func parseFileMoveConfig(m map[string]interface{}) (*filemove.Config, error) {
 		MaxSize:    getInt64(m, "max_size"),
 		Overwrite:  getBool(m, "overwrite"),
 		Cron:       getString(m, "cron"),
+		Backend:    getString(m, "backend"),
+		URL:        getString(m, "url"),
+		Username:   getString(m, "username"),
+		Password:   getString(m, "password"),
+		Token:      getString(m, "token"),
 	}
 	if value, ok := m["size"]; ok && value != nil && strings.TrimSpace(getString(m, "size")) != "" {
 		size := getInt64(m, "size")

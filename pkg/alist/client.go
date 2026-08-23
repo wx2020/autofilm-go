@@ -490,13 +490,36 @@ func (c *AlistClient) FSMkdir(ctx context.Context, dirPath string) error {
 	return err
 }
 
+// FSRemove 删除目录中的文件或目录。
+func (c *AlistClient) FSRemove(ctx context.Context, dirPath string, names []string) error {
+	req := struct {
+		Dir   string   `json:"dir"`
+		Names []string `json:"names"`
+	}{Dir: dirPath, Names: names}
+	jsonData, _ := json.Marshal(req)
+	_, err := c.doRequest(ctx, "POST", "/api/fs/remove", jsonData)
+	return err
+}
+
+// FSMove 在同一个 OpenList 实例内移动文件或目录。
+func (c *AlistClient) FSMove(ctx context.Context, srcDir, dstDir string, names []string) error {
+	req := struct {
+		SrcDir string   `json:"src_dir"`
+		DstDir string   `json:"dst_dir"`
+		Names  []string `json:"names"`
+	}{SrcDir: srcDir, DstDir: dstDir, Names: names}
+	jsonData, _ := json.Marshal(req)
+	_, err := c.doRequest(ctx, "POST", "/api/fs/move", jsonData)
+	return err
+}
+
 // FSPut 提交异步文件上传任务
 // dstPath: 目标目录路径
 // files: 要上传的文件列表（path=文件名, url=源文件直链）
 // 返回值: alist_task_id（异步任务ID）
 func (c *AlistClient) FSPut(ctx context.Context, dstPath string, files []FSPutFile) (string, error) {
 	req := struct {
-		Path  string     `json:"path"`
+		Path  string      `json:"path"`
 		Files []FSPutFile `json:"files"`
 	}{
 		Path:  dstPath,

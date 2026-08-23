@@ -74,6 +74,7 @@ FileMoveList:
   - id: "local-archive"
     enable: true
     run_on_start: false
+    backend: "local"     # local 或 openlist
     source_dir: "D:/downloads"
     target_dir: "D:/media"
     regex: "(?i)\\.(mkv|mp4)$"
@@ -98,6 +99,12 @@ FileMoveList:
 | `cron` | 定时表达式，支持秒字段 |
 
 FileMove 默认跳过符号链接和非普通文件。跨文件系统移动时会先复制到目标目录的临时文件，完成后再删除源文件。
+
+### FileMove OpenList 模式
+
+FileMove 的 `backend` 默认为 `local`。设置为 `openlist` 后，模块通过 OpenList API 递归扫描源目录，并按正则和文件大小筛选文件；目标目录不存在时会自动创建，移动使用同一个 OpenList 实例的 `fs/move` 接口。
+
+OpenList 模式需要额外配置 `url`、`username`/`password` 或 `token`，且 `source_dir`、`target_dir` 必须使用 OpenList 路径（以 `/` 开头）。FileMove 仅支持同一个 OpenList 实例内移动；跨 OpenList 实例的整目录同步仍使用 AlistSync。
 
 ### 环境变量
 

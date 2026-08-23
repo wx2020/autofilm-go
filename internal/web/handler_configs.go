@@ -105,6 +105,26 @@ func validateModuleConfig(typ string, cfg map[string]interface{}) error {
 		return pathRequired("target_dir")
 	}
 	if typ == "filemove" {
+		backendValue, backendSet := cfg["backend"]
+		backend := strings.ToLower(strings.TrimSpace(fmt.Sprint(backendValue)))
+		if !backendSet || backendValue == nil || backend == "" || backend == "<nil>" {
+			backend = "local"
+		}
+		if backend != "local" && backend != "openlist" {
+			return fmt.Errorf("filemove backend must be local or openlist")
+		}
+		if backend == "openlist" {
+			rawURL := fmt.Sprint(cfg["url"])
+			u, err := url.ParseRequestURI(rawURL)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return fmt.Errorf("OpenList 地址无效")
+			}
+			for _, key := range []string{"source_dir", "target_dir"} {
+				if !strings.HasPrefix(strings.TrimSpace(fmt.Sprint(cfg[key])), "/") {
+					return fmt.Errorf("%s 必须以 / 开头", key)
+				}
+			}
+		}
 		if strings.TrimSpace(fmt.Sprint(cfg["source_dir"])) == "" {
 			return fmt.Errorf("source_dir cannot be empty")
 		}
