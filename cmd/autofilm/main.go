@@ -559,8 +559,8 @@ func parseFileMoveConfig(m map[string]interface{}) (*filemove.Config, error) {
 		SourceDir:  getString(m, "source_dir"),
 		TargetDir:  getString(m, "target_dir"),
 		Regex:      getString(m, "regex"),
-		MinSize:    getInt64(m, "min_size"),
-		MaxSize:    getInt64(m, "max_size"),
+		MinSize:    0,
+		MaxSize:    0,
 		Overwrite:  getBool(m, "overwrite"),
 		Flatten:    getBool(m, "flatten"),
 		Cron:       getString(m, "cron"),
@@ -571,8 +571,20 @@ func parseFileMoveConfig(m map[string]interface{}) (*filemove.Config, error) {
 		Token:      getString(m, "token"),
 	}
 	if value, ok := m["size"]; ok && value != nil && strings.TrimSpace(getString(m, "size")) != "" {
-		size := getInt64(m, "size")
+		size, err := filemove.ParseSize(value)
+		if err != nil {
+			return nil, fmt.Errorf("parse filemove size: %w", err)
+		}
 		config.Size = &size
+	}
+	for key, target := range map[string]*int64{"min_size": &config.MinSize, "max_size": &config.MaxSize} {
+		if value, ok := m[key]; ok && value != nil && strings.TrimSpace(getString(m, key)) != "" {
+			size, err := filemove.ParseSize(value)
+			if err != nil {
+				return nil, fmt.Errorf("parse filemove %s: %w", key, err)
+			}
+			*target = size
+		}
 	}
 	return config, nil
 }

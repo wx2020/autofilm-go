@@ -3,7 +3,6 @@ package web
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/akimio/autofilm/internal/core"
+	"github.com/akimio/autofilm/internal/modules/filemove"
 	"github.com/akimio/autofilm/internal/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/robfig/cron/v3"
@@ -142,37 +142,18 @@ func validateModuleConfig(typ string, cfg map[string]interface{}) error {
 		}
 		for _, key := range []string{"size", "min_size", "max_size"} {
 			if value, exists := cfg[key]; exists && value != nil && strings.TrimSpace(fmt.Sprint(value)) != "" {
-				if _, ok := parseNonNegativeInt64(value); !ok {
+				if _, err := filemove.ParseSize(value); err != nil {
 					return fmt.Errorf("%s must be a non-negative integer (bytes)", key)
 				}
 			}
 		}
-		minSize := parseConfigInt64(cfg["min_size"])
-		maxSize := parseConfigInt64(cfg["max_size"])
+		minSize, _ := filemove.ParseSize(cfg["min_size"])
+		maxSize, _ := filemove.ParseSize(cfg["max_size"])
 		if maxSize > 0 && minSize > maxSize {
 			return fmt.Errorf("min_size cannot be greater than max_size")
 		}
 	}
 	return nil
-}
-
-func parseNonNegativeInt64(value interface{}) (int64, bool) {
-	switch v := value.(type) {
-	case int:
-		return int64(v), v >= 0
-	case int64:
-		return v, v >= 0
-	case float64:
-		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v != math.Trunc(v) || v >= 9223372036854775808 {
-			return 0, false
-		}
-		return int64(v), true
-	case string:
-		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-		return n, err == nil && n >= 0
-	default:
-		return 0, false
-	}
 }
 
 func parseConfigInt64(value interface{}) int64 {

@@ -78,9 +78,9 @@ FileMoveList:
     source_dir: "D:/downloads"
     target_dir: "D:/media"
     regex: "(?i)\\.(mkv|mp4)$"
-    size: null             # 精确大小，单位：字节；null 表示不限制
-    min_size: 0            # 最小大小，0 表示不限制
-    max_size: 0            # 最大大小，0 表示不限制
+    size: null             # 精确大小；支持 1073741824、50KB、500MB、1GB
+    min_size: 0            # 最小大小；0 表示不限制
+    max_size: 0            # 最大大小；0 表示不限制
     flatten: false         # 是否平铺到目标目录，不保留源目录层级
     overwrite: false       # 目标文件存在时是否覆盖
     cron: "0 */10 * * * *"
@@ -93,9 +93,9 @@ FileMoveList:
 | `source_dir` | 本地源目录，必须存在且为目录 |
 | `target_dir` | 本地目标目录，不允许位于源目录内部 |
 | `regex` | 匹配相对路径的 Go 正则表达式，可为空 |
-| `size` | 精确文件大小，单位为字节，可为空 |
-| `min_size` | 最小文件大小，单位为字节；`0` 表示不限制 |
-| `max_size` | 最大文件大小，单位为字节；`0` 表示不限制 |
+| `size` | 精确文件大小，支持字节数和 `KB`/`MB`/`GB`/`TB`，可为空 |
+| `min_size` | 最小文件大小，支持字节数和 `KB`/`MB`/`GB`/`TB`；`0` 表示不限制 |
+| `max_size` | 最大文件大小，支持字节数和 `KB`/`MB`/`GB`/`TB`；`0` 表示不限制 |
 | `flatten` | 是否将匹配文件直接移动到目标目录，不保留源目录层级 |
 | `overwrite` | 是否覆盖目标中的同名文件，默认 `false` |
 | `cron` | 定时表达式，支持秒字段 |

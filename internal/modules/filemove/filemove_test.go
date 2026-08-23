@@ -100,6 +100,21 @@ func TestMoveFlattenPreservesOnlyFileName(t *testing.T) {
 	}
 }
 
+func TestParseSize(t *testing.T) {
+	cases := map[string]int64{
+		"50KB":       50 * 1024,
+		"500MB":      500 * 1024 * 1024,
+		"1GB":        1024 * 1024 * 1024,
+		"1073741824": 1024 * 1024 * 1024,
+	}
+	for input, expected := range cases {
+		got, err := ParseSize(input)
+		if err != nil || got != expected {
+			t.Fatalf("ParseSize(%q) = %d, %v; want %d", input, got, err, expected)
+		}
+	}
+}
+
 func TestNewRejectsTargetInsideSource(t *testing.T) {
 	root := t.TempDir()
 	_, err := New(&Config{

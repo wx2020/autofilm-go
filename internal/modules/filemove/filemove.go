@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/akimio/autofilm/pkg/alist"
@@ -36,6 +38,60 @@ type Config struct {
 	Username   string
 	Password   string
 	Token      string
+}
+
+// ParseSize parses a byte size such as 1073741824, 50KB, 500MB or 1GB.
+// Units use binary multiples: 1KB=1024 bytes.
+func ParseSize(value interface{}) (int64, error) {
+	if value == nil {
+		return 0, errors.New("size is empty")
+	}
+	if number, ok := value.(float64); ok {
+		if number < 0 || math.IsNaN(number) || math.IsInf(number, 0) || number != math.Trunc(number) || number >= 9223372036854775808 {
+			return 0, fmt.Errorf("invalid numeric size %v", number)
+		}
+		return int64(number), nil
+	}
+	if number, ok := value.(int64); ok {
+		if number < 0 {
+			return 0, fmt.Errorf("invalid numeric size %d", number)
+		}
+		return number, nil
+	}
+	if number, ok := value.(int); ok {
+		if number < 0 {
+			return 0, fmt.Errorf("invalid numeric size %d", number)
+		}
+		return int64(number), nil
+	}
+	text := strings.ToUpper(strings.TrimSpace(fmt.Sprint(value)))
+	if text == "" {
+		return 0, errors.New("size is empty")
+	}
+	match := regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB)?$`).FindStringSubmatch(text)
+	if match == nil {
+		return 0, fmt.Errorf("invalid size %q; use bytes or B/KB/MB/GB/TB", text)
+	}
+	number, err := strconv.ParseFloat(match[1], 64)
+	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+		return 0, fmt.Errorf("invalid size %q", text)
+	}
+	multiplier := float64(1)
+	switch match[2] {
+	case "KB":
+		multiplier = 1 << 10
+	case "MB":
+		multiplier = 1 << 20
+	case "GB":
+		multiplier = 1 << 30
+	case "TB":
+		multiplier = 1 << 40
+	}
+	bytes := number * multiplier
+	if bytes < 0 || bytes != math.Trunc(bytes) || bytes >= 9223372036854775808 {
+		return 0, fmt.Errorf("size %q is outside the supported byte range", text)
+	}
+	return int64(bytes), nil
 }
 
 // MoveReport contains the result of one scan.

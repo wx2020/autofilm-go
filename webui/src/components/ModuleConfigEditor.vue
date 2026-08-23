@@ -45,9 +45,9 @@
             <Field label="源目录" class="col-md-6"><input v-model.trim="form.source_dir" class="form-control" required placeholder="D:/downloads"></Field>
             <Field label="目标目录" class="col-md-6"><input v-model.trim="form.target_dir" class="form-control" required placeholder="D:/media"></Field>
             <Field label="正则表达式（匹配相对路径）" class="col-12"><input v-model="form.regex" class="form-control" placeholder="(?i)\\.(mkv|mp4)$"></Field>
-            <Field label="精确大小（字节，可选）" class="col-md-4"><input v-model.number="form.size" type="number" min="0" class="form-control" placeholder="不限制"></Field>
-            <Field label="最小大小（字节）" class="col-md-4"><input v-model.number="form.min_size" type="number" min="0" class="form-control"></Field>
-            <Field label="最大大小（字节，0 不限制）" class="col-md-4"><input v-model.number="form.max_size" type="number" min="0" class="form-control"></Field>
+            <Field label="精确大小" class="col-md-4"><input v-model.trim="form.size" type="text" class="form-control" placeholder="例如 1GB"></Field>
+            <Field label="最小大小" class="col-md-4"><input v-model.trim="form.min_size" type="text" class="form-control" placeholder="例如 50KB"></Field>
+            <Field label="最大大小（可选）" class="col-md-4"><input v-model.trim="form.max_size" type="text" class="form-control" placeholder="例如 500MB"></Field>
             <Switch v-model="form.flatten" label="平铺移动（不保留目录）" />
             <Switch v-model="form.overwrite" label="目标存在时覆盖" />
             <div class="col-12"><div class="form-text">文件会保留源目录下的相对目录结构；默认不覆盖目标中的同名文件。</div></div>
