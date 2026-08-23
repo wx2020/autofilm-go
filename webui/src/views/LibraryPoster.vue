@@ -7,7 +7,6 @@
     <ModuleConfigEditor type="libraryposter" :defaults="defaults" @changed="load" />
     <ModuleCard v-for="m in modules" :key="m.id" :module="m"
       @run="triggerRun(m)" @toggle="toggleModule(m)" />
-    <div v-if="!modules.length" class="text-muted">暂无封面生成配置</div>
   </div>
 </template>
 

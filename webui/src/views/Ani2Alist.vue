@@ -1,10 +1,12 @@
 <template>
   <div>
     <h3 class="mb-4"><i class="bi-film me-2"></i>Ani2Alist 模块</h3>
+    <div class="alert alert-info py-2">
+      根据 Ani RSS 更新获取动画信息，并将匹配内容整理到 Alist 目录。
+    </div>
     <ModuleConfigEditor type="ani2alist" :defaults="defaults" @changed="load" />
     <ModuleCard v-for="m in modules" :key="m.id" :module="m"
       @run="triggerRun(m)" @toggle="toggleModule(m)" />
-    <div v-if="!modules.length" class="text-muted">暂无 Ani2Alist 配置</div>
   </div>
 </template>
 

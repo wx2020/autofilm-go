@@ -22,7 +22,7 @@
       <div class="mt-2 small text-muted">
         <div v-if="module.cron">Cron: <code>{{ module.cron }}</code></div>
         <div v-if="nextRun">下次运行: {{ formatTime(nextRun) }}</div>
-        <div v-if="lastRun">上次运行: {{ formatTime(lastRun) }}</div>
+        <div>上次运行: {{ lastRun ? formatTime(lastRun) : '未运行' }}</div>
         <div v-if="lastError" class="text-danger">上次错误: {{ lastError }}</div>
       </div>
     </div>

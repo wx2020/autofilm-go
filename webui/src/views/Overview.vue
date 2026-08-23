@@ -3,12 +3,14 @@
     <h3 class="mb-4"><i class="bi-speedometer2 me-2"></i>系统概览</h3>
     <div class="row">
       <div class="col-md-3 mb-3" v-for="stat in stats" :key="stat.label">
-        <div class="card text-center">
-          <div class="card-body">
-            <h5 class="card-title">{{ stat.count }}</h5>
-            <p class="card-text text-muted">{{ stat.label }}</p>
+        <RouterLink :to="stat.path" class="text-decoration-none text-reset">
+          <div class="card text-center h-100">
+            <div class="card-body">
+              <h5 class="card-title">{{ stat.count }}</h5>
+              <p class="card-text text-muted mb-0">{{ stat.label }}</p>
+            </div>
           </div>
-        </div>
+        </RouterLink>
       </div>
     </div>
     <h5 class="mt-4 mb-3">模块列表</h5>
@@ -30,11 +32,11 @@ async function loadModules() {
     const res = await fetch('/api/modules')
     modules.value = await res.json()
     stats.value = [
-      { label: 'Alist2Strm', count: modules.value.filter(m => m.type === 'alist2strm').length },
-      { label: 'Ani2Alist', count: modules.value.filter(m => m.type === 'ani2alist').length },
-      { label: 'LibraryPoster', count: modules.value.filter(m => m.type === 'libraryposter').length },
-      { label: 'Alissync', count: modules.value.filter(m => m.type === 'alissync').length },
-      { label: 'FileMove', count: modules.value.filter(m => m.type === 'filemove').length },
+      { label: 'Alist2Strm', path: '/alist2strm', count: modules.value.filter(m => m.type === 'alist2strm').length },
+      { label: 'Ani2Alist', path: '/ani2alist', count: modules.value.filter(m => m.type === 'ani2alist').length },
+      { label: '封面生成', path: '/libraryposter', count: modules.value.filter(m => m.type === 'libraryposter').length },
+      { label: 'Alist 同步', path: '/alistsync', count: modules.value.filter(m => m.type === 'alistsync').length },
+      { label: '递归移动', path: '/filemove', count: modules.value.filter(m => m.type === 'filemove').length },
     ]
   } catch (e) {
     console.error(e)

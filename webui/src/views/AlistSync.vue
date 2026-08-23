@@ -1,7 +1,10 @@
 <template>
   <div>
-    <h3 class="mb-4"><i class="bi-arrow-left-right me-2"></i>同步任务队列</h3>
-    <ModuleConfigEditor type="alissync" :defaults="defaults" @changed="load" />
+    <h3 class="mb-4"><i class="bi-arrow-left-right me-2"></i>Alist 同步</h3>
+    <div class="alert alert-info py-2">
+      按配置的目录对同步 Alist/OpenList 文件，支持任务队列、失败重试和状态追踪。
+    </div>
+    <ModuleConfigEditor type="alistsync" :defaults="defaults" @changed="load" />
     <div class="table-responsive">
       <table class="table table-hover">
         <thead>
@@ -37,7 +40,7 @@
         </tbody>
       </table>
     </div>
-    <div v-if="!tasks.length" class="text-muted">暂无同步任务</div>
+    <div v-if="!tasks.length" class="text-muted">暂无 Alist 同步任务</div>
     <ModuleCard v-for="m in syncModules" :key="m.id" :module="m"
       @run="triggerRun(m)" @toggle="toggleModule(m)" />
   </div>
@@ -73,7 +76,7 @@ async function load() {
     const queue = await tRes.json()
     const all = await mRes.json()
     tasks.value = Array.isArray(queue) ? queue : []
-    syncModules.value = Array.isArray(all) ? all.filter(m => m.type === 'alissync') : []
+    syncModules.value = Array.isArray(all) ? all.filter(m => m.type === 'alistsync') : []
   } catch (e) {
     tasks.value = []
     syncModules.value = []

@@ -1,6 +1,9 @@
 <template>
   <div>
     <h3 class="mb-4"><i class="bi-link-45deg me-2"></i>Alist2Strm 模块</h3>
+    <div class="alert alert-info py-2">
+      扫描 Alist/OpenList 目录并生成 STRM 文件，可按规则处理字幕、图片和 NFO 等媒体文件。
+    </div>
     <ModuleConfigEditor type="alist2strm" :defaults="defaults" @changed="load" />
     <ModuleCard v-for="m in modules" :key="m.id" :module="m"
       @run="triggerRun(m)" @toggle="toggleModule(m)" />
