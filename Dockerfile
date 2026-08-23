@@ -28,7 +28,7 @@ RUN go mod download
 COPY . .
 
 # 从前端构建阶段复制 dist
-COPY --from=web-builder /build/webui/dist ./internal/web/dist
+COPY --from=web-builder /build/internal/web/dist ./internal/web/dist
 
 # 构建参数传递
 ARG VERSION
