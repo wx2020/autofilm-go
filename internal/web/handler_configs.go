@@ -17,7 +17,7 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-var moduleTypes = map[string]bool{"alist2strm": true, "ani2alist": true, "libraryposter": true, "alissync": true, "filemove": true}
+var moduleTypes = map[string]bool{"alist2strm": true, "ani2alist": true, "libraryposter": true, "alistsync": true, "filemove": true}
 
 func moduleStore(w http.ResponseWriter, r *http.Request) (*storage.Store, string, bool) {
 	typ := chi.URLParam(r, "type")

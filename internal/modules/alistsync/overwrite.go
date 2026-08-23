@@ -1,4 +1,4 @@
-package alissync
+package alistsync
 
 import (
 	"time"

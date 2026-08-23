@@ -1,4 +1,4 @@
-package alissync
+package alistsync
 
 import (
 	"context"
@@ -13,14 +13,14 @@ import (
 
 // RetryDaemon 守护重试协程
 type RetryDaemon struct {
-	client       *alist.AlistClient
-	queue        *QueueManager
-	config       *RetryConfig
-	logger       *logrus.Logger
-	stopCh       chan struct{}
-	wg           sync.WaitGroup
-	activeTasks  map[string]*SyncTask
-	activeMu     sync.RWMutex
+	client      *alist.AlistClient
+	queue       *QueueManager
+	config      *RetryConfig
+	logger      *logrus.Logger
+	stopCh      chan struct{}
+	wg          sync.WaitGroup
+	activeTasks map[string]*SyncTask
+	activeMu    sync.RWMutex
 }
 
 // NewRetryDaemon 创建守护重试协程
@@ -221,7 +221,7 @@ func (d *RetryDaemon) calcNextRetry(attempt int) time.Time {
 	if d.config.Jitter > 0 {
 		jitterRange := time.Duration(float64(backoff) * d.config.Jitter)
 		if jitterRange > 0 {
-			jitter := time.Duration(rand.Int63n(int64(jitterRange * 2))) - jitterRange
+			jitter := time.Duration(rand.Int63n(int64(jitterRange*2))) - jitterRange
 			backoff += jitter
 		}
 	}

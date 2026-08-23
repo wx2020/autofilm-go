@@ -12,8 +12,8 @@ import (
 
 	"github.com/akimio/autofilm/internal/core"
 	"github.com/akimio/autofilm/internal/extensions"
-	"github.com/akimio/autofilm/internal/modules/alissync"
 	"github.com/akimio/autofilm/internal/modules/alist2strm"
+	"github.com/akimio/autofilm/internal/modules/alistsync"
 	"github.com/akimio/autofilm/internal/modules/ani2alist"
 	"github.com/akimio/autofilm/internal/modules/filemove"
 	"github.com/akimio/autofilm/internal/modules/libraryposter"
@@ -25,7 +25,7 @@ import (
 var logger = core.GetLogger()
 
 // 全局 alissync 守护协程列表，用于优雅关闭
-var alissyncDaemons []*alissync.RetryDaemon
+var alistsyncDaemons []*alistsync.RetryDaemon
 
 // 全局数据库存储
 var dbStore *storage.Store
@@ -57,6 +57,9 @@ func main() {
 
 		dbStore = storage.NewStore(database, key)
 		storage.SetGlobalStore(dbStore)
+		if err := dbStore.MigrateModuleType("alissync", "alistsync"); err != nil {
+			fmt.Printf("模块类型迁移失败: %v\n", err)
+		}
 		if appSettings, err := dbStore.GetAppSettings(); err == nil {
 			settings.ApplyRuntimeSettings(appSettings.Debug, appSettings.Timezone)
 		}
@@ -199,7 +202,7 @@ func main() {
 	<-stopCtx.Done()
 
 	// 停止 alissync 守护协程
-	for _, d := range alissyncDaemons {
+	for _, d := range alistsyncDaemons {
 		d.Stop()
 	}
 
@@ -223,7 +226,7 @@ func getAni2AlistList() []map[string]interface{} {
 }
 
 func getAlisyncList() []map[string]interface{} {
-	return getModuleConfigs("alissync")
+	return getModuleConfigs("alistsync")
 }
 
 func getFileMoveList() []map[string]interface{} {
@@ -457,18 +460,18 @@ func addAlistSyncJobs(c *cron.Cron) error {
 		}
 
 		entry := &web.ModuleEntry{
-			Type:    web.ModuleAlissync,
+			Type:    web.ModuleAlistSync,
 			ID:      config.ID,
 			Enabled: config.Enable,
 			Cron:    config.Cron,
 		}
 		entry.RunFunc = func() {
-			err := web.TrackRun(string(web.ModuleAlissync), config.ID, func() error {
-				syncer, err := alissync.New(config)
+			err := web.TrackRun(string(web.ModuleAlistSync), config.ID, func() error {
+				syncer, err := alistsync.New(config)
 				if err != nil {
 					return err
 				}
-				alissyncDaemons = append(alissyncDaemons, syncer.Daemon())
+				alistsyncDaemons = append(alistsyncDaemons, syncer.Daemon())
 				return syncer.Run(context.Background())
 			})
 			if err != nil {
@@ -531,8 +534,8 @@ func addFileMoveJobs(c *cron.Cron) error {
 					return err
 				}
 				report, err := mover.Move(context.Background())
-				logger.Infof("FileMove %s completed: scanned=%d matched=%d renamed=%d moved=%d skipped=%d errors=%d",
-					config.ID, report.Scanned, report.Matched, report.Renamed, report.Moved, report.Skipped, len(report.Errors))
+				logger.Infof("FileMove %s completed: scanned=%d matched=%d renamed=%d moved=%d removed_dirs=%d skipped=%d errors=%d",
+					config.ID, report.Scanned, report.Matched, report.Renamed, report.Moved, report.RemovedDirs, report.Skipped, len(report.Errors))
 				return err
 			})
 			if err != nil {
@@ -565,6 +568,7 @@ func parseFileMoveConfig(m map[string]interface{}) (*filemove.Config, error) {
 		Flatten:           getBool(m, "flatten"),
 		RenameRegex:       getString(m, "rename_regex"),
 		RenameReplacement: getString(m, "rename_replacement"),
+		RemoveMatchedDirs: getBool(m, "remove_matched_dirs"),
 		Cron:              getString(m, "cron"),
 		Backend:           getString(m, "backend"),
 		URL:               getString(m, "url"),
@@ -591,8 +595,8 @@ func parseFileMoveConfig(m map[string]interface{}) (*filemove.Config, error) {
 	return config, nil
 }
 
-func parseAlistSyncConfig(m map[string]interface{}) (*alissync.Config, error) {
-	config := &alissync.Config{
+func parseAlistSyncConfig(m map[string]interface{}) (*alistsync.Config, error) {
+	config := &alistsync.Config{
 		ID:         getString(m, "id"),
 		Enable:     getEnable(m, "enable"),
 		RunOnStart: getBool(m, "run_on_start"),
@@ -608,7 +612,7 @@ func parseAlistSyncConfig(m map[string]interface{}) (*alissync.Config, error) {
 	if pairsRaw, ok := m["pairs"].([]interface{}); ok {
 		for _, p := range pairsRaw {
 			if pairMap, ok := p.(map[string]interface{}); ok {
-				pair := alissync.PairConfig{
+				pair := alistsync.PairConfig{
 					Src:       getString(pairMap, "src"),
 					Dst:       getString(pairMap, "dst"),
 					DeleteSrc: getBool(pairMap, "delete_src"),
@@ -621,7 +625,7 @@ func parseAlistSyncConfig(m map[string]interface{}) (*alissync.Config, error) {
 
 	// 解析 retry
 	if retryRaw, ok := m["retry"].(map[string]interface{}); ok {
-		config.Retry = alissync.RetryConfig{
+		config.Retry = alistsync.RetryConfig{
 			MaxAttempts: getInt(retryRaw, "max_attempts"),
 			Backoff:     getString(retryRaw, "backoff"),
 			Jitter:      getFloat64(retryRaw, "jitter"),

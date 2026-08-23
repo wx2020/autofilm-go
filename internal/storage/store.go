@@ -117,6 +117,29 @@ func (s *Store) DeleteModuleConfig(moduleType, id string) error {
 	return err
 }
 
+// MigrateModuleType renames a persisted module type while preserving existing data.
+func (s *Store) MigrateModuleType(oldType, newType string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM module_configs WHERE module_type=? AND cfg_id IN
+		(SELECT cfg_id FROM module_configs WHERE module_type=?)`, newType, oldType); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE module_configs SET module_type=? WHERE module_type=?", newType, oldType); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE task_runs SET module_type=? WHERE module_type=?", newType, oldType); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE alerts SET source=REPLACE(source, ?, ?) WHERE source LIKE ?", oldType+":", newType+":", oldType+":%"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // NewStore 创建 Store 实例
 func NewStore(db *sql.DB, key []byte) *Store {
 	return &Store{db: db, key: key}
@@ -675,7 +698,7 @@ func (s *Store) ImportConfigMap(moduleType string, cfg map[string]interface{}) e
 		return s.importAlist2Strm(cfg, connID)
 	case "ani2alist":
 		return s.importAni2Alist(cfg, connID)
-	case "alissync":
+	case "alistsync", "alissync":
 		return s.importAlissync(cfg, connID)
 	}
 	return nil

@@ -14,7 +14,7 @@ const (
 	ModuleAlist2Strm    ModuleType = "alist2strm"
 	ModuleAni2Alist     ModuleType = "ani2alist"
 	ModuleLibraryPoster ModuleType = "libraryposter"
-	ModuleAlissync      ModuleType = "alissync"
+	ModuleAlistSync     ModuleType = "alistsync"
 	ModuleFileMove      ModuleType = "filemove"
 )
 

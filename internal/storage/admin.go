@@ -252,7 +252,7 @@ func (s *Store) ExportBackup() (*Backup, error) {
 		return nil, err
 	}
 	b := &Backup{Version: 1, CreatedAt: time.Now(), Settings: settings, ModuleConfigs: map[string][]map[string]interface{}{}}
-	for _, typ := range []string{"alist2strm", "ani2alist", "libraryposter", "alissync"} {
+	for _, typ := range []string{"alist2strm", "ani2alist", "libraryposter", "alistsync"} {
 		list, err := s.ListModuleConfigs(typ)
 		if err != nil {
 			return nil, err
@@ -277,7 +277,10 @@ func (s *Store) ImportBackup(b *Backup) error {
 		return err
 	}
 	for typ, configs := range b.ModuleConfigs {
-		if typ != "alist2strm" && typ != "ani2alist" && typ != "libraryposter" && typ != "alissync" {
+		if typ == "alissync" {
+			typ = "alistsync"
+		}
+		if typ != "alist2strm" && typ != "ani2alist" && typ != "libraryposter" && typ != "alistsync" {
 			continue
 		}
 		if _, err = tx.Exec("DELETE FROM module_configs WHERE module_type=?", typ); err != nil {

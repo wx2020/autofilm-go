@@ -18,7 +18,7 @@ func ImportYamlConfigs(s *Store) error {
 	}{
 		{"alist2strm", nil, getYamlList("Alist2StrmList")},
 		{"ani2alist", nil, getYamlList("Ani2AlistList")},
-		{"alissync", nil, getYamlList("AlistSyncList")},
+		{"alistsync", nil, getYamlList("AlistSyncList")},
 		{"filemove", nil, getYamlList("FileMoveList")},
 	}
 
