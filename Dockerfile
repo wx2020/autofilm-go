@@ -7,10 +7,10 @@ ARG NODE_VERSION=22
 FROM node:${NODE_VERSION}-alpine AS web-builder
 
 WORKDIR /build/webui
-COPY webui/package.json webui/package-lock.json* ./
-RUN npm ci
+COPY webui/package.json webui/pnpm-lock.yaml ./
+RUN corepack enable && pnpm install --frozen-lockfile
 COPY webui/ .
-RUN npm run build
+RUN pnpm run build
 
 # ========= Go 构建阶段 =========
 FROM golang:${GO_VERSION}-alpine AS builder
