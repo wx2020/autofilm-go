@@ -33,8 +33,9 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   if (to.meta.public) return true
   const status = await fetch('/api/auth/status').then(r => r.json()).catch(() => ({ initialized: false }))
-  if (!status.initialized) return '/login'
-  if (status.initialized && !sessionStorage.getItem('autofilm_token')) return '/login'
+  const token = sessionStorage.getItem('autofilm_token')
+  if (!status.initialized && !(status.legacy_token && token)) return '/login'
+  if (!token) return '/login'
   return true
 })
 

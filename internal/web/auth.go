@@ -30,6 +30,13 @@ func (s *Server) tokenAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := bearerToken(r)
 		store := storage.GlobalStore()
+		// A configured web token is an explicit administrator access token.
+		// It remains valid after the first database user is created.
+		if s.webConfig.Token != "" && token == s.webConfig.Token {
+			ctx := context.WithValue(r.Context(), authContextKey{}, authUser{Username: "legacy-admin", Role: "admin"})
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
 		if store != nil {
 			if count, err := store.UserCount(); err == nil && count > 0 {
 				user, err := store.UserBySession(token)
@@ -44,7 +51,7 @@ func (s *Server) tokenAuth(next http.Handler) http.Handler {
 		}
 
 		// 首次启动前兼容单 Token；创建首个管理员后自动切换到用户会话。
-		if s.webConfig.Token == "" || token == s.webConfig.Token {
+		if s.webConfig.Token == "" {
 			ctx := context.WithValue(r.Context(), authContextKey{}, authUser{Username: "legacy-admin", Role: "admin"})
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
