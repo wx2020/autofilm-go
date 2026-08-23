@@ -200,6 +200,19 @@ AlistSyncList: []
   #     jitter: 0.2
   #   wait_time: 0
   #   cron: "0 */2 * * *"
+
+FileMoveList: []
+  # - id: "local-movie-archive"
+  #   enable: true
+  #   run_on_start: false
+  #   source_dir: "D:/downloads"
+  #   target_dir: "D:/media"
+  #   regex: "(?i)\\.(mkv|mp4)$"
+  #   size: null
+  #   min_size: 0
+  #   max_size: 0
+  #   overwrite: false
+  #   cron: "0 */10 * * * *"
 `
 
 	if err := os.WriteFile(configFile, []byte(defaultConfig), 0644); err != nil {
@@ -297,6 +310,12 @@ func (sm *SettingManager) GetAni2AlistList() []map[string]interface{} {
 func (sm *SettingManager) GetAlistSyncList() []map[string]interface{} {
 	var result []map[string]interface{}
 	sm.viper.UnmarshalKey("AlistSyncList", &result)
+	return result
+}
+
+func (sm *SettingManager) GetFileMoveList() []map[string]interface{} {
+	var result []map[string]interface{}
+	sm.viper.UnmarshalKey("FileMoveList", &result)
 	return result
 }
 

@@ -28,7 +28,7 @@ func ImportLegacyYAML(s *Store, path string) (int, error) {
 	if err := yaml.Unmarshal(data, &root); err != nil {
 		return 0, err
 	}
-	keys := map[string]string{"Alist2StrmList": "alist2strm", "Ani2AlistList": "ani2alist", "LibraryPosterList": "libraryposter", "AlistSyncList": "alissync"}
+	keys := map[string]string{"Alist2StrmList": "alist2strm", "Ani2AlistList": "ani2alist", "LibraryPosterList": "libraryposter", "AlistSyncList": "alissync", "FileMoveList": "filemove"}
 	imported := 0
 	for key, typ := range keys {
 		items, _ := root[key].([]interface{})

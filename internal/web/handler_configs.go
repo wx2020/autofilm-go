@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/akimio/autofilm/internal/core"
@@ -14,7 +16,7 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-var moduleTypes = map[string]bool{"alist2strm": true, "ani2alist": true, "libraryposter": true, "alissync": true}
+var moduleTypes = map[string]bool{"alist2strm": true, "ani2alist": true, "libraryposter": true, "alissync": true, "filemove": true}
 
 func moduleStore(w http.ResponseWriter, r *http.Request) (*storage.Store, string, bool) {
 	typ := chi.URLParam(r, "type")
@@ -77,7 +79,7 @@ func validateModuleConfig(typ string, cfg map[string]interface{}) error {
 	if _, err := parser.Parse(spec); err != nil {
 		return fmt.Errorf("Cron 表达式无效: %w", err)
 	}
-	if typ != "libraryposter" {
+	if typ != "libraryposter" && typ != "filemove" {
 		rawURL := fmt.Sprint(cfg["url"])
 		u, err := url.ParseRequestURI(rawURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -102,7 +104,51 @@ func validateModuleConfig(typ string, cfg map[string]interface{}) error {
 	if typ == "ani2alist" {
 		return pathRequired("target_dir")
 	}
+	if typ == "filemove" {
+		if strings.TrimSpace(fmt.Sprint(cfg["source_dir"])) == "" {
+			return fmt.Errorf("source_dir cannot be empty")
+		}
+		if strings.TrimSpace(fmt.Sprint(cfg["target_dir"])) == "" {
+			return fmt.Errorf("target_dir cannot be empty")
+		}
+		if source, target := filepath.Clean(fmt.Sprint(cfg["source_dir"])), filepath.Clean(fmt.Sprint(cfg["target_dir"])); source == target {
+			return fmt.Errorf("source_dir and target_dir must be different")
+		}
+		if regex := strings.TrimSpace(fmt.Sprint(cfg["regex"])); regex != "" {
+			if _, err := regexp.Compile(regex); err != nil {
+				return fmt.Errorf("regex 表达式无效: %w", err)
+			}
+		}
+		for _, key := range []string{"size", "min_size", "max_size"} {
+			if value, exists := cfg[key]; exists && value != nil && fmt.Sprint(value) != "" {
+				if n, err := strconv.ParseInt(fmt.Sprint(value), 10, 64); err != nil || n < 0 {
+					return fmt.Errorf("%s must be a non-negative integer (bytes)", key)
+				}
+			}
+		}
+		minSize := parseConfigInt64(cfg["min_size"])
+		maxSize := parseConfigInt64(cfg["max_size"])
+		if maxSize > 0 && minSize > maxSize {
+			return fmt.Errorf("min_size cannot be greater than max_size")
+		}
+	}
 	return nil
+}
+
+func parseConfigInt64(value interface{}) int64 {
+	switch v := value.(type) {
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	case string:
+		n, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		return n
+	default:
+		return 0
+	}
 }
 
 func (s *Server) handleDeleteDbConfig(w http.ResponseWriter, r *http.Request) {

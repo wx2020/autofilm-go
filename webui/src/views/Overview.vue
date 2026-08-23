@@ -34,6 +34,7 @@ async function loadModules() {
       { label: 'Ani2Alist', count: modules.value.filter(m => m.type === 'ani2alist').length },
       { label: 'LibraryPoster', count: modules.value.filter(m => m.type === 'libraryposter').length },
       { label: 'Alissync', count: modules.value.filter(m => m.type === 'alissync').length },
+      { label: 'FileMove', count: modules.value.filter(m => m.type === 'filemove').length },
     ]
   } catch (e) {
     console.error(e)

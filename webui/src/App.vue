@@ -45,6 +45,7 @@ const allNavItems = [
   { path: '/ani2alist', label: 'Ani2Alist', icon: 'bi-film' },
   { path: '/libraryposter', label: '封面生成', icon: 'bi-image' },
   { path: '/sync', label: '同步任务', icon: 'bi-arrow-left-right' },
+  { path: '/filemove', label: '递归移动', icon: 'bi-folder-symlink' },
   { path: '/settings', label: '系统设置', icon: 'bi-gear', admin: true },
   { path: '/logs', label: '日志', icon: 'bi-journal-text' },
   { path: '/monitoring', label: '监控告警', icon: 'bi-activity' },

@@ -27,7 +27,7 @@
           <Switch v-model="form.run_on_start" label="启动时立即运行" />
         </div>
 
-        <template v-if="type !== 'libraryposter'">
+        <template v-if="type !== 'libraryposter' && type !== 'filemove'">
           <h6 class="mt-4 mb-3">Alist / OpenList 连接</h6>
           <div class="row g-3">
             <Field label="服务器地址" class="col-md-6"><input v-model.trim="form.url" type="url" class="form-control" required placeholder="http://127.0.0.1:5244"></Field>
@@ -39,7 +39,20 @@
           </div>
         </template>
 
-        <template v-if="type === 'alist2strm'">
+        <template v-if="type === 'filemove'">
+          <h6 class="mt-4 mb-3">递归移动规则</h6><div class="row g-3">
+            <Field label="源目录" class="col-md-6"><input v-model.trim="form.source_dir" class="form-control" required placeholder="D:/downloads"></Field>
+            <Field label="目标目录" class="col-md-6"><input v-model.trim="form.target_dir" class="form-control" required placeholder="D:/media"></Field>
+            <Field label="正则表达式（匹配相对路径）" class="col-12"><input v-model="form.regex" class="form-control" placeholder="(?i)\\.(mkv|mp4)$"></Field>
+            <Field label="精确大小（字节，可选）" class="col-md-4"><input v-model.number="form.size" type="number" min="0" class="form-control" placeholder="不限制"></Field>
+            <Field label="最小大小（字节）" class="col-md-4"><input v-model.number="form.min_size" type="number" min="0" class="form-control"></Field>
+            <Field label="最大大小（字节，0 不限制）" class="col-md-4"><input v-model.number="form.max_size" type="number" min="0" class="form-control"></Field>
+            <Switch v-model="form.overwrite" label="目标存在时覆盖" />
+            <div class="col-12"><div class="form-text">文件会保留源目录下的相对目录结构；默认不覆盖目标中的同名文件。</div></div>
+          </div>
+        </template>
+
+        <template v-else-if="type === 'alist2strm'">
           <h6 class="mt-4 mb-3">扫描与输出</h6><div class="row g-3">
             <Field label="源目录" class="col-md-6"><input v-model.trim="form.source_dir" class="form-control" required></Field>
             <Field label="输出目录" class="col-md-6"><input v-model.trim="form.target_dir" class="form-control" required></Field>
@@ -120,12 +133,12 @@ const Switch = defineComponent({ inheritAttrs:false, props:{modelValue:Boolean,l
 const props=defineProps({type:{type:String,required:true},defaults:{type:Object,required:true}}); const emit=defineEmits(['changed'])
 const configs=ref([]),editing=ref(false),loading=ref(false),saving=ref(false),testing=ref(false),form=ref({}),originalID=ref(''),message=ref(''),error=ref(false)
 const clone=v=>JSON.parse(JSON.stringify(v))
-function normalize(v){const x=clone(v); x.smart_protection ||= {enabled:true,threshold:100,grace_scans:3}; x.configs ||= []; x.pairs ||= []; x.retry ||= {max_attempts:10,backoff:'expo',jitter:.2}; return x}
+function normalize(v){const x=clone(v); x.smart_protection ||= {enabled:true,threshold:100,grace_scans:3}; x.configs ||= []; x.pairs ||= []; x.retry ||= {max_attempts:10,backoff:'expo',jitter:.2}; if(props.type==='filemove'){x.regex ??= ''; x.size ??= null; x.min_size ??= 0; x.max_size ??= 0; x.overwrite ??= false} return x}
 async function request(url,options){const res=await fetch(url,options),body=await res.json().catch(()=>({}));if(!res.ok)throw new Error(body.error||`请求失败 (${res.status})`);return body}
 async function load(){loading.value=true;try{configs.value=await request(`/api/configs/${props.type}`)}catch(e){show(e.message,true)}finally{loading.value=false}}
 function createConfig(){originalID.value='';form.value=normalize(props.defaults);editing.value=true;message.value=''}
 function editConfig(cfg){originalID.value=String(cfg.id);form.value=normalize(cfg);editing.value=true;message.value=''}
-function validate(){const f=form.value;if(!/^[A-Za-z0-9_-]{2,64}$/.test(f.id||''))return'配置 ID 只能包含字母、数字、下划线和短横线（2-64位）';if(!f.cron||f.cron.trim().split(/\s+/).length<5)return'Cron 表达式无效';if(props.type!=='libraryposter'&&!/^https?:\/\//.test(f.url||''))return'Alist 地址必须以 http:// 或 https:// 开头';if(props.type==='alist2strm'&&(!f.source_dir?.startsWith('/')||!f.target_dir))return'源目录必须以 / 开头，输出目录不能为空';if(props.type==='ani2alist'&&!f.target_dir?.startsWith('/'))return'挂载目标目录必须以 / 开头';if(props.type==='libraryposter'&&(!/^https?:\/\//.test(f.url||'')||!f.api_key))return'媒体服务器地址或 API Key 无效';if(props.type==='alissync'&&(!f.pairs?.length||f.pairs.some(p=>!p.src?.startsWith('/')||!p.dst?.startsWith('/'))))return'至少需要一组以 / 开头的同步目录对';return''}
+function validate(){const f=form.value;if(!/^[A-Za-z0-9_-]{2,64}$/.test(f.id||''))return'配置 ID 格式无效';if(!f.cron||f.cron.trim().split(/\s+/).length<5)return'Cron 表达式无效';if(props.type!=='libraryposter'&&props.type!=='filemove'&&!/^https?:\/\//.test(f.url||''))return'Alist 地址必须以 http:// 或 https:// 开头';if(props.type==='filemove'&&(!f.source_dir||!f.target_dir))return'源目录和目标目录不能为空';if(props.type==='alist2strm'&&(!f.source_dir?.startsWith('/')||!f.target_dir))return'源目录必须以 / 开头，输出目录不能为空';if(props.type==='ani2alist'&&!f.target_dir?.startsWith('/'))return'挂载目标目录必须以 / 开头';if(props.type==='libraryposter'&&(!/^https?:\/\//.test(f.url||'')||!f.api_key))return'媒体服务器地址或 API Key 无效';if(props.type==='alissync'&&(!f.pairs?.length||f.pairs.some(p=>!p.src?.startsWith('/')||!p.dst?.startsWith('/'))))return'至少需要一组以 / 开头的同步目录对';return''}
 async function saveConfig(){const invalid=validate();if(invalid){show(invalid,true);return} saving.value=true;try{await request(`/api/configs/${props.type}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form.value)});editing.value=false;show('配置已保存并应用');await load();emit('changed')}catch(e){show(e.message,true)}finally{saving.value=false}}
 async function testConnection(){testing.value=true;try{await request('/api/alist/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:form.value.url,username:form.value.username,password:form.value.password,token:form.value.token})});show('连接测试成功')}catch(e){show(`连接失败：${e.message}`,true)}finally{testing.value=false}}
 async function removeConfig(cfg){if(!confirm(`确定删除配置“${cfg.id}”吗？`))return;try{await request(`/api/configs/${props.type}/${encodeURIComponent(cfg.id)}`,{method:'DELETE'});show('配置已删除');await load();emit('changed')}catch(e){show(e.message,true)}}

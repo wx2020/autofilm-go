@@ -1,16 +1,15 @@
 # AutoFilm Go
 
-AutoFilm 的 Go 实现：将 Alist/OpenList 媒体生成 STRM，维护动漫挂载、云端同步和 Jellyfin/Emby 媒体库海报，并提供完整 Web 管理界面。
+AutoFilm 是一个 Go 实现的媒体自动化工具，提供 Alist/OpenList 媒体处理、本地文件整理、同步、海报生成以及 Web 管理界面。
 
-## 功能
+## 功能模块
 
-- **Alist2Strm**：全量/增量扫描、STRM、字幕/图片/NFO、BDMV、并发与 QPS、智能删除保护
-- **Ani2Alist**：ANI Open 数据与 RSS 更新、季度和关键词过滤
-- **AlistSync**：多目录对、覆盖策略、SQLite 任务队列、指数退避和 dead letter
-- **LibraryPoster**：1200×1800 拼图、主视觉、标题/副标题、自定义 TTF 字体
-- **Web 管理**：选项化配置、任务执行、日志、监控、告警、用户与备份
-- **安全**：AES-GCM 凭据加密，管理员/操作员/只读用户 RBAC，24 小时会话
-- **运维**：SQLite、Prometheus `/metrics`、Webhook、Docker、单二进制部署
+- **Alist2Strm**：扫描 Alist/OpenList 媒体目录并生成 STRM，支持增量扫描、字幕/图片/NFO、并发、QPS 限制和智能删除保护。
+- **Ani2Alist**：根据 ANI Open 数据或 RSS 更新 Alist 目录结构，支持季度、关键词和 RSS 模式。
+- **AlistSync**：同步多个 Alist/OpenList 目录对，支持 `never`、`always`、`if_newer` 覆盖策略、任务队列和失败重试。
+- **FileMove**：递归扫描本地目录，按相对路径正则和文件大小筛选文件，定时移动并保留目录结构。
+- **LibraryPoster**：从 Jellyfin/Emby 媒体库生成拼图海报，支持自定义标题、副标题和 TTF 字体。
+- **Web 管理**：模块配置、手动执行、启停任务、日志、监控、告警、用户权限和备份恢复。
 
 ## 快速开始
 
@@ -20,9 +19,11 @@ AutoFilm 的 Go 实现：将 Alist/OpenList 媒体生成 STRM，维护动漫挂�
 docker compose up -d
 ```
 
-访问 `http://localhost:8080`，首次打开时创建管理员账户。容器默认通过 `AUTOFILM_WEB_HOST=0.0.0.0` 监听。
+默认访问地址为 <http://localhost:8080>。首次访问时创建管理员账户。
 
-### 本地构建
+### 本地运行
+
+先构建前端资源，再编译 Go 程序：
 
 ```bash
 cd webui
@@ -33,48 +34,99 @@ go build -o autofilm ./cmd/autofilm
 ./autofilm
 ```
 
-Vue 生产资源使用 `go:embed` 打入二进制，正式运行不需要 Node.js 或 npm。
+前端构建产物会嵌入 Go 二进制，正式运行不需要 Node.js 或 npm。
+
+也可以使用 Make：
+
+```bash
+make all       # 构建前端并编译程序
+make test      # 运行 Go 测试
+make vet       # 运行 go vet
+```
 
 ## 配置与数据
 
-系统和模块配置保存在 `data/autofilm.db`，凭据使用 `data/.db_key` 加密。旧版 `config.yaml` 仅在数据库为空时自动导入一次，之后不参与运行。
+系统配置和模块配置保存在 SQLite：
 
-WebUI 中可以：
+- 数据库：`data/autofilm.db`
+- 数据库密钥：`data/.db_key`
+- 日志目录：`logs/`
+- WebUI：`http://127.0.0.1:8080`
 
-- 新增、编辑、删除四类模块配置
-- 测试 Alist/OpenList 连接
-- 设置时区、监听地址、端口、Token 和告警 Webhook
-- 创建管理员、操作员和只读用户
-- 下载或恢复逻辑配置备份
+当前运行时以 SQLite 中的模块配置为准。旧版 `config.yaml` 仅在数据库为空时自动导入一次，之后不再参与运行时配置。
 
-环境变量：
+WebUI 支持配置以下模块：
 
-| 变量 | 用途 |
-|---|---|
-| `AUTOFILM_WEB_HOST` | 覆盖监听地址 |
-| `AUTOFILM_WEB_PORT` | 覆盖监听端口 |
-| `AUTOFILM_WEB_ENABLED` | 启用或禁用 Web |
-| `AUTOFILM_WEB_TOKEN` | 首次创建用户前的兼容 Token |
+- `/alist2strm`
+- `/ani2alist`
+- `/libraryposter`
+- `/sync`
+- `/filemove`
+
+### FileMove 配置
+
+FileMove 用于将本地源目录中的文件递归移动到目标目录。正则表达式匹配源目录下使用 `/` 分隔的相对路径；移动后会保留相对目录结构。
+
+示例：
+
+```yaml
+FileMoveList:
+  - id: "local-archive"
+    enable: true
+    run_on_start: false
+    source_dir: "D:/downloads"
+    target_dir: "D:/media"
+    regex: "(?i)\\.(mkv|mp4)$"
+    size: null             # 精确大小，单位：字节；null 表示不限制
+    min_size: 0            # 最小大小，0 表示不限制
+    max_size: 0            # 最大大小，0 表示不限制
+    overwrite: false       # 目标文件存在时是否覆盖
+    cron: "0 */10 * * * *"
+```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `source_dir` | 本地源目录，必须存在且为目录 |
+| `target_dir` | 本地目标目录，不允许位于源目录内部 |
+| `regex` | 匹配相对路径的 Go 正则表达式，可为空 |
+| `size` | 精确文件大小，单位为字节，可为空 |
+| `min_size` | 最小文件大小，单位为字节；`0` 表示不限制 |
+| `max_size` | 最大文件大小，单位为字节；`0` 表示不限制 |
+| `overwrite` | 是否覆盖目标中的同名文件，默认 `false` |
+| `cron` | 定时表达式，支持秒字段 |
+
+FileMove 默认跳过符号链接和非普通文件。跨文件系统移动时会先复制到目标目录的临时文件，完成后再删除源文件。
+
+### 环境变量
+
+| 变量 | 作用 |
+| --- | --- |
+| `AUTOFILM_WEB_HOST` | 覆盖 Web 监听地址 |
+| `AUTOFILM_WEB_PORT` | 覆盖 Web 监听端口 |
+| `AUTOFILM_WEB_ENABLED` | 启用或禁用 Web 服务 |
+| `AUTOFILM_WEB_TOKEN` | Web/API 访问令牌 |
 | `AUTOFILM_DB_KEY` | Base64 编码的 32 字节数据库加密密钥 |
 
 ## 权限
 
 | 角色 | 权限 |
-|---|---|
-| `admin` | 系统设置、用户、备份恢复和全部操作 |
-| `operator` | 配置模块、执行任务、重试和确认告警 |
+| --- | --- |
+| `admin` | 系统设置、用户、备份恢复和全部模块操作 |
+| `operator` | 模块配置、手动执行、启停任务、重试和告警确认 |
 | `viewer` | 查看状态、日志、运行记录和告警 |
 
-## 监控与告警
+## 监控与接口
 
-- Prometheus：`GET /metrics`
+- Prometheus 指标：`GET /metrics`
 - Web 指标：`GET /api/metrics`
-- 任务失败会写入 SQLite 告警表
-- 配置告警 Webhook 后会 POST：
+- 健康检查：`GET /api/health`
+- 模块列表：`GET /api/modules`
+- 模块手动执行：`POST /api/modules/{type}/{id}/run`
+- 模块启停：`POST /api/modules/{type}/{id}/toggle`
 
-```json
-{"level":"error","source":"alist2strm:movies","message":"错误信息"}
-```
+任务失败会写入运行记录和告警表；配置了 Webhook 后，会向 Webhook 地址发送 JSON 告警。
 
 ## 开发验证
 
@@ -84,7 +136,12 @@ go test ./...
 go vet ./...
 ```
 
-当前测试覆盖数据库迁移回放、旧 YAML 导入、AES-GCM、密码哈希、配置密文、快照 diff、同步覆盖和退避、海报生成、Web 参数校验、嵌入 SPA 和 Prometheus 指标。
+前端验证：
+
+```bash
+cd webui
+npm run build
+```
 
 ## 许可证
 

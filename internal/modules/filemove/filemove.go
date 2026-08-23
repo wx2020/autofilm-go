@@ -1,0 +1,283 @@
+package filemove
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+)
+
+// Config describes one recursive local file move task.
+// Regex is matched against the slash-separated path relative to SourceDir.
+// Size, when set, is an exact size in bytes. A zero MinSize or MaxSize means
+// that the corresponding bound is not set.
+type Config struct {
+	ID         string
+	Enable     bool
+	RunOnStart bool
+	SourceDir  string
+	TargetDir  string
+	Regex      string
+	Size       *int64
+	MinSize    int64
+	MaxSize    int64
+	Overwrite  bool
+	Cron       string
+}
+
+// MoveReport contains the result of one scan.
+type MoveReport struct {
+	Scanned int
+	Matched int
+	Moved   int
+	Skipped int
+	Errors  []error
+}
+
+// Error returns all per-file errors as one error.
+func (r MoveReport) Error() error {
+	return errors.Join(r.Errors...)
+}
+
+// FileMover recursively moves files matching its configuration.
+type FileMover struct {
+	config    Config
+	sourceDir string
+	targetDir string
+	pattern   *regexp.Regexp
+}
+
+// New validates a file move configuration and creates a mover.
+func New(cfg *Config) (*FileMover, error) {
+	if cfg == nil {
+		return nil, errors.New("filemove config is nil")
+	}
+	if strings.TrimSpace(cfg.SourceDir) == "" {
+		return nil, errors.New("source_dir cannot be empty")
+	}
+	if strings.TrimSpace(cfg.TargetDir) == "" {
+		return nil, errors.New("target_dir cannot be empty")
+	}
+	if cfg.Size != nil && *cfg.Size < 0 {
+		return nil, errors.New("size cannot be negative")
+	}
+	if cfg.MinSize < 0 || cfg.MaxSize < 0 {
+		return nil, errors.New("min_size and max_size cannot be negative")
+	}
+	if cfg.MaxSize > 0 && cfg.MinSize > cfg.MaxSize {
+		return nil, errors.New("min_size cannot be greater than max_size")
+	}
+
+	sourceDir, err := filepath.Abs(filepath.Clean(cfg.SourceDir))
+	if err != nil {
+		return nil, fmt.Errorf("resolve source_dir: %w", err)
+	}
+	targetDir, err := filepath.Abs(filepath.Clean(cfg.TargetDir))
+	if err != nil {
+		return nil, fmt.Errorf("resolve target_dir: %w", err)
+	}
+	if samePath(sourceDir, targetDir) {
+		return nil, errors.New("source_dir and target_dir must be different")
+	}
+	if pathWithin(sourceDir, targetDir) {
+		return nil, errors.New("target_dir cannot be inside source_dir")
+	}
+
+	var pattern *regexp.Regexp
+	if strings.TrimSpace(cfg.Regex) != "" {
+		pattern, err = regexp.Compile(cfg.Regex)
+		if err != nil {
+			return nil, fmt.Errorf("compile regex: %w", err)
+		}
+	}
+
+	return &FileMover{
+		config:    *cfg,
+		sourceDir: sourceDir,
+		targetDir: targetDir,
+		pattern:   pattern,
+	}, nil
+}
+
+// Move scans and moves matching files until the scan completes or ctx is
+// cancelled. A non-nil error means the scan itself failed or one or more
+// files could not be moved; successful files are still reflected in report.
+func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
+	var report MoveReport
+
+	if err := ctx.Err(); err != nil {
+		return report, err
+	}
+	info, err := os.Stat(m.sourceDir)
+	if err != nil {
+		return report, fmt.Errorf("stat source_dir: %w", err)
+	}
+	if !info.IsDir() {
+		return report, fmt.Errorf("source_dir is not a directory: %s", m.sourceDir)
+	}
+	if err := os.MkdirAll(m.targetDir, 0755); err != nil {
+		return report, fmt.Errorf("create target_dir: %w", err)
+	}
+
+	err = filepath.WalkDir(m.sourceDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			report.Errors = append(report.Errors, fmt.Errorf("walk %s: %w", path, walkErr))
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if path == m.sourceDir || entry.IsDir() {
+			return nil
+		}
+		// WalkDir does not follow directory symlinks, but explicitly skip all
+		// symlinks so a file symlink is never copied as if it were a real file.
+		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return nil
+		}
+
+		report.Scanned++
+		fileInfo, err := entry.Info()
+		if err != nil {
+			report.Errors = append(report.Errors, fmt.Errorf("stat %s: %w", path, err))
+			return nil
+		}
+		rel, err := filepath.Rel(m.sourceDir, path)
+		if err != nil {
+			report.Errors = append(report.Errors, fmt.Errorf("relative path %s: %w", path, err))
+			return nil
+		}
+		if !m.matches(filepath.ToSlash(rel), fileInfo.Size()) {
+			return nil
+		}
+		report.Matched++
+
+		destination := filepath.Join(m.targetDir, rel)
+		if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+			report.Errors = append(report.Errors, fmt.Errorf("create parent for %s: %w", destination, err))
+			return nil
+		}
+		if err := moveFile(path, destination, fileInfo, m.config.Overwrite); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				report.Skipped++
+			} else {
+				report.Errors = append(report.Errors, err)
+			}
+			return nil
+		}
+		report.Moved++
+		return nil
+	})
+	if err != nil {
+		return report, err
+	}
+	return report, report.Error()
+}
+
+func (m *FileMover) matches(relativePath string, size int64) bool {
+	if m.pattern != nil && !m.pattern.MatchString(relativePath) {
+		return false
+	}
+	if m.config.Size != nil && size != *m.config.Size {
+		return false
+	}
+	if m.config.MinSize > 0 && size < m.config.MinSize {
+		return false
+	}
+	if m.config.MaxSize > 0 && size > m.config.MaxSize {
+		return false
+	}
+	return true
+}
+
+func moveFile(source, destination string, info fs.FileInfo, overwrite bool) error {
+	if !overwrite {
+		if _, err := os.Lstat(destination); err == nil {
+			return fmt.Errorf("destination exists: %w: %s", fs.ErrExist, destination)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("check destination %s: %w", destination, err)
+		}
+	}
+
+	if err := os.Rename(source, destination); err == nil {
+		return nil
+	}
+
+	// Rename can fail when source and target are on different filesystems.
+	// Copy to a temporary file in the destination directory first, then rename
+	// the completed copy so an interrupted copy never becomes the final file.
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".autofilm-move-*")
+	if err != nil {
+		return fmt.Errorf("create temporary destination for %s: %w", destination, err)
+	}
+	temporaryPath := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		os.Remove(temporaryPath)
+		return fmt.Errorf("close temporary destination %s: %w", temporaryPath, err)
+	}
+	defer os.Remove(temporaryPath)
+
+	if err := copyFile(source, temporaryPath, info); err != nil {
+		return fmt.Errorf("copy %s to %s: %w", source, destination, err)
+	}
+	if overwrite {
+		if err := os.Remove(destination); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("replace destination %s: %w", destination, err)
+		}
+	}
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return fmt.Errorf("finalize destination %s: %w", destination, err)
+	}
+	if err := os.Remove(source); err != nil {
+		return fmt.Errorf("remove source %s after copy: %w", source, err)
+	}
+	return nil
+}
+
+func copyFile(source, destination string, info fs.FileInfo) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+
+	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(output, input); err != nil {
+		output.Close()
+		return err
+	}
+	if err := output.Sync(); err != nil {
+		output.Close()
+		return err
+	}
+	if err := output.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(destination, info.Mode().Perm())
+}
+
+func samePath(first, second string) bool {
+	if filepath.Clean(first) == filepath.Clean(second) {
+		return true
+	}
+	if filepath.Separator == '\\' {
+		return strings.EqualFold(filepath.Clean(first), filepath.Clean(second))
+	}
+	return false
+}
+
+func pathWithin(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil || rel == "." || filepath.IsAbs(rel) {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}

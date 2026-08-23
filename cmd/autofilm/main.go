@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/akimio/autofilm/internal/modules/alissync"
 	"github.com/akimio/autofilm/internal/modules/alist2strm"
 	"github.com/akimio/autofilm/internal/modules/ani2alist"
+	"github.com/akimio/autofilm/internal/modules/filemove"
 	"github.com/akimio/autofilm/internal/modules/libraryposter"
 	"github.com/akimio/autofilm/internal/storage"
 	"github.com/akimio/autofilm/internal/web"
@@ -139,6 +141,10 @@ func main() {
 	}
 
 	// 添加AlistSync任务
+	if err := addFileMoveJobs(cronScheduler); err != nil {
+		logger.Errorf("add FileMove jobs failed: %v", err)
+	}
+
 	if err := addAlistSyncJobs(cronScheduler); err != nil {
 		logger.Errorf("添加AlistSync任务失败: %v", err)
 	} else {
@@ -171,6 +177,7 @@ func main() {
 				addAni2AlistJobs(cronScheduler)
 				addLibraryPosterJobs(cronScheduler)
 				addAlistSyncJobs(cronScheduler)
+				addFileMoveJobs(cronScheduler)
 
 				cronScheduler.Start()
 				logger.Info("定时任务重建完成")
@@ -217,6 +224,10 @@ func getAni2AlistList() []map[string]interface{} {
 
 func getAlisyncList() []map[string]interface{} {
 	return getModuleConfigs("alissync")
+}
+
+func getFileMoveList() []map[string]interface{} {
+	return getModuleConfigs("filemove")
 }
 
 func getModuleConfigs(moduleType string) []map[string]interface{} {
@@ -486,6 +497,80 @@ func addAlistSyncJobs(c *cron.Cron) error {
 }
 
 // parseAlistSyncConfig 解析AlistSync配置
+func addFileMoveJobs(c *cron.Cron) error {
+	list := getFileMoveList()
+	if len(list) == 0 {
+		return nil
+	}
+
+	logger := core.GetLogger()
+	for _, raw := range list {
+		config, err := parseFileMoveConfig(raw)
+		if err != nil {
+			logger.Errorf("parse FileMove config failed: %v", err)
+			continue
+		}
+		if config.Cron == "" {
+			logger.Warnf("FileMove %s has no cron expression", config.ID)
+			continue
+		}
+
+		entry := &web.ModuleEntry{
+			Type:    web.ModuleFileMove,
+			ID:      config.ID,
+			Enabled: config.Enable,
+			Cron:    config.Cron,
+		}
+		entry.RunFunc = func() {
+			if !entry.Enabled {
+				return
+			}
+			err := web.TrackRun(string(web.ModuleFileMove), config.ID, func() error {
+				mover, err := filemove.New(config)
+				if err != nil {
+					return err
+				}
+				report, err := mover.Move(context.Background())
+				logger.Infof("FileMove %s completed: scanned=%d matched=%d moved=%d skipped=%d errors=%d",
+					config.ID, report.Scanned, report.Matched, report.Moved, report.Skipped, len(report.Errors))
+				return err
+			})
+			if err != nil {
+				logger.Errorf("FileMove run failed: %v", err)
+			}
+		}
+		web.GetModuleRegistry().Register(entry)
+		runFileMove := entry.RunFunc
+		if _, err := c.AddFunc(config.Cron, runFileMove); err != nil {
+			logger.Errorf("add FileMove job failed %s: %v", config.ID, err)
+		}
+		if config.RunOnStart && config.Enable {
+			go runFileMove()
+		}
+	}
+	return nil
+}
+
+func parseFileMoveConfig(m map[string]interface{}) (*filemove.Config, error) {
+	config := &filemove.Config{
+		ID:         getString(m, "id"),
+		Enable:     getEnable(m, "enable"),
+		RunOnStart: getBool(m, "run_on_start"),
+		SourceDir:  getString(m, "source_dir"),
+		TargetDir:  getString(m, "target_dir"),
+		Regex:      getString(m, "regex"),
+		MinSize:    getInt64(m, "min_size"),
+		MaxSize:    getInt64(m, "max_size"),
+		Overwrite:  getBool(m, "overwrite"),
+		Cron:       getString(m, "cron"),
+	}
+	if value, ok := m["size"]; ok && value != nil && strings.TrimSpace(getString(m, "size")) != "" {
+		size := getInt64(m, "size")
+		config.Size = &size
+	}
+	return config, nil
+}
+
 func parseAlistSyncConfig(m map[string]interface{}) (*alissync.Config, error) {
 	config := &alissync.Config{
 		ID:         getString(m, "id"),
@@ -701,6 +786,34 @@ func getInt(m map[string]interface{}, key string) int {
 			var i int
 			fmt.Sscanf(val, "%d", &i)
 			return i
+		}
+	}
+	return 0
+}
+
+func getInt64(m map[string]interface{}, key string) int64 {
+	if v, ok := m[key]; ok {
+		switch val := v.(type) {
+		case int:
+			return int64(val)
+		case int8:
+			return int64(val)
+		case int16:
+			return int64(val)
+		case int32:
+			return int64(val)
+		case int64:
+			return val
+		case uint:
+			return int64(val)
+		case uint64:
+			return int64(val)
+		case float64:
+			return int64(val)
+		case string:
+			var n int64
+			fmt.Sscanf(val, "%d", &n)
+			return n
 		}
 	}
 	return 0

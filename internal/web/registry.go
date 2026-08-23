@@ -11,10 +11,11 @@ import (
 type ModuleType string
 
 const (
-	ModuleAlist2Strm   ModuleType = "alist2strm"
-	ModuleAni2Alist    ModuleType = "ani2alist"
+	ModuleAlist2Strm    ModuleType = "alist2strm"
+	ModuleAni2Alist     ModuleType = "ani2alist"
 	ModuleLibraryPoster ModuleType = "libraryposter"
-	ModuleAlissync     ModuleType = "alissync"
+	ModuleAlissync      ModuleType = "alissync"
+	ModuleFileMove      ModuleType = "filemove"
 )
 
 // ModuleEntry 模块条目运行时状态

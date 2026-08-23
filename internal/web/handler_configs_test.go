@@ -22,3 +22,30 @@ func TestValidateModuleConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateFileMoveConfig(t *testing.T) {
+	valid := map[string]interface{}{
+		"id": "local-move", "cron": "0 0 * * * *",
+		"source_dir": `C:\downloads`, "target_dir": `D:\media`,
+		"regex": `(?i)\.(mkv|mp4)$`, "min_size": float64(1024),
+	}
+	if err := validateModuleConfig("filemove", valid); err != nil {
+		t.Fatal(err)
+	}
+
+	invalidRegex := map[string]interface{}{
+		"id": "local-move", "cron": "0 0 * * * *",
+		"source_dir": `C:\downloads`, "target_dir": `D:\media`, "regex": "[",
+	}
+	if err := validateModuleConfig("filemove", invalidRegex); err == nil {
+		t.Fatal("invalid regex accepted")
+	}
+
+	invalidSize := map[string]interface{}{
+		"id": "local-move", "cron": "0 0 * * * *",
+		"source_dir": `C:\downloads`, "target_dir": `D:\media`, "min_size": -1,
+	}
+	if err := validateModuleConfig("filemove", invalidSize); err == nil {
+		t.Fatal("negative size accepted")
+	}
+}
