@@ -60,7 +60,7 @@ COPY --from=builder /build/autofilm /app/autofilm
 RUN chmod +x /app/autofilm
 
 # 挂载点
-VOLUME ["/config", "/logs", "/fonts", "/media", "/data"]
+VOLUME ["/app/config", "/app/logs", "/app/data", "/fonts", "/media"]
 
 # 默认命令
 CMD ["/app/autofilm"]

@@ -108,6 +108,8 @@ OpenList 模式需要额外配置 `url`、`username`/`password` 或 `token`，�
 
 ### 环境变量
 
+Docker Compose 会将 `config/`、`logs/` 和 `data/` 持久化到容器的 `/app` 目录对应位置；其中 `data/autofilm.db` 和 `data/.db_key` 必须保留，否则重新创建容器后会被视为全新安装，需要重新创建管理员。
+
 | 变量 | 作用 |
 | --- | --- |
 | `AUTOFILM_WEB_HOST` | 覆盖 Web 监听地址 |
