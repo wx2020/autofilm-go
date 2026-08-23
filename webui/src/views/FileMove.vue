@@ -20,7 +20,7 @@ const modules = ref([])
 const defaults = {
   id: 'file-archive', enable: true, run_on_start: false, backend: 'local', url: 'http://127.0.0.1:5244', username: '', password: '', token: '',
   source_dir: 'D:/downloads', target_dir: 'D:/media', regex: '(?i)\\.(mkv|mp4)$',
-  size: null, min_size: 0, max_size: 0, flatten: false, overwrite: false,
+  rename_regex: '', rename_replacement: '', size: null, min_size: 0, max_size: 0, flatten: false, overwrite: false,
   cron: '0 0 */1 * * *'
 }
 

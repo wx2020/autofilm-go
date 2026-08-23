@@ -513,6 +513,17 @@ func (c *AlistClient) FSMove(ctx context.Context, srcDir, dstDir string, names [
 	return err
 }
 
+// FSRename 重命名文件或目录。
+func (c *AlistClient) FSRename(ctx context.Context, path, name string) error {
+	req := struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}{Path: path, Name: name}
+	jsonData, _ := json.Marshal(req)
+	_, err := c.doRequest(ctx, "POST", "/api/fs/rename", jsonData)
+	return err
+}
+
 // FSPut 提交异步文件上传任务
 // dstPath: 目标目录路径
 // files: 要上传的文件列表（path=文件名, url=源文件直链）

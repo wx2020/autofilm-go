@@ -45,6 +45,8 @@
             <Field label="源目录" class="col-md-6"><input v-model.trim="form.source_dir" class="form-control" required placeholder="D:/downloads"></Field>
             <Field label="目标目录" class="col-md-6"><input v-model.trim="form.target_dir" class="form-control" required placeholder="D:/media"></Field>
             <Field label="正则表达式（匹配相对路径）" class="col-12"><input v-model="form.regex" class="form-control" placeholder="(?i)\\.(mkv|mp4)$"></Field>
+            <Field label="移动前重命名正则（匹配文件名）" class="col-md-6"><input v-model="form.rename_regex" class="form-control" placeholder="^hhd880\\.com@"></Field>
+            <Field label="重命名替换文本" class="col-md-6"><input v-model="form.rename_replacement" class="form-control" placeholder="留空表示删除匹配部分"></Field>
             <Field label="精确大小" class="col-md-4"><input v-model.trim="form.size" type="text" class="form-control" placeholder="例如 1GB"></Field>
             <Field label="最小大小" class="col-md-4"><input v-model.trim="form.min_size" type="text" class="form-control" placeholder="例如 50KB"></Field>
             <Field label="最大大小（可选）" class="col-md-4"><input v-model.trim="form.max_size" type="text" class="form-control" placeholder="例如 500MB"></Field>
@@ -135,7 +137,7 @@ const Switch = defineComponent({ inheritAttrs:false, props:{modelValue:Boolean,l
 const props=defineProps({type:{type:String,required:true},defaults:{type:Object,required:true}}); const emit=defineEmits(['changed'])
 const configs=ref([]),editing=ref(false),loading=ref(false),saving=ref(false),testing=ref(false),form=ref({}),originalID=ref(''),message=ref(''),error=ref(false)
 const clone=v=>JSON.parse(JSON.stringify(v))
-function normalize(v){const x=clone(v); x.smart_protection ||= {enabled:true,threshold:100,grace_scans:3}; x.configs ||= []; x.pairs ||= []; x.retry ||= {max_attempts:10,backoff:'expo',jitter:.2}; if(props.type==='filemove'){x.backend ??= 'local'; x.regex ??= ''; x.size ??= null; x.min_size ??= 0; x.max_size ??= 0; x.flatten ??= false; x.overwrite ??= false} return x}
+function normalize(v){const x=clone(v); x.smart_protection ||= {enabled:true,threshold:100,grace_scans:3}; x.configs ||= []; x.pairs ||= []; x.retry ||= {max_attempts:10,backoff:'expo',jitter:.2}; if(props.type==='filemove'){x.backend ??= 'local'; x.regex ??= ''; x.rename_regex ??= ''; x.rename_replacement ??= ''; x.size ??= null; x.min_size ??= 0; x.max_size ??= 0; x.flatten ??= false; x.overwrite ??= false} return x}
 async function request(url,options){const res=await fetch(url,options),body=await res.json().catch(()=>({}));if(!res.ok)throw new Error(body.error||`请求失败 (${res.status})`);return body}
 async function load(){loading.value=true;try{configs.value=await request(`/api/configs/${props.type}`)}catch(e){show(e.message,true)}finally{loading.value=false}}
 function createConfig(){originalID.value='';form.value=normalize(props.defaults);editing.value=true;message.value=''}

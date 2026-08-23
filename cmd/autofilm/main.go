@@ -531,8 +531,8 @@ func addFileMoveJobs(c *cron.Cron) error {
 					return err
 				}
 				report, err := mover.Move(context.Background())
-				logger.Infof("FileMove %s completed: scanned=%d matched=%d moved=%d skipped=%d errors=%d",
-					config.ID, report.Scanned, report.Matched, report.Moved, report.Skipped, len(report.Errors))
+				logger.Infof("FileMove %s completed: scanned=%d matched=%d renamed=%d moved=%d skipped=%d errors=%d",
+					config.ID, report.Scanned, report.Matched, report.Renamed, report.Moved, report.Skipped, len(report.Errors))
 				return err
 			})
 			if err != nil {
@@ -553,22 +553,24 @@ func addFileMoveJobs(c *cron.Cron) error {
 
 func parseFileMoveConfig(m map[string]interface{}) (*filemove.Config, error) {
 	config := &filemove.Config{
-		ID:         getString(m, "id"),
-		Enable:     getEnable(m, "enable"),
-		RunOnStart: getBool(m, "run_on_start"),
-		SourceDir:  getString(m, "source_dir"),
-		TargetDir:  getString(m, "target_dir"),
-		Regex:      getString(m, "regex"),
-		MinSize:    0,
-		MaxSize:    0,
-		Overwrite:  getBool(m, "overwrite"),
-		Flatten:    getBool(m, "flatten"),
-		Cron:       getString(m, "cron"),
-		Backend:    getString(m, "backend"),
-		URL:        getString(m, "url"),
-		Username:   getString(m, "username"),
-		Password:   getString(m, "password"),
-		Token:      getString(m, "token"),
+		ID:                getString(m, "id"),
+		Enable:            getEnable(m, "enable"),
+		RunOnStart:        getBool(m, "run_on_start"),
+		SourceDir:         getString(m, "source_dir"),
+		TargetDir:         getString(m, "target_dir"),
+		Regex:             getString(m, "regex"),
+		MinSize:           0,
+		MaxSize:           0,
+		Overwrite:         getBool(m, "overwrite"),
+		Flatten:           getBool(m, "flatten"),
+		RenameRegex:       getString(m, "rename_regex"),
+		RenameReplacement: getString(m, "rename_replacement"),
+		Cron:              getString(m, "cron"),
+		Backend:           getString(m, "backend"),
+		URL:               getString(m, "url"),
+		Username:          getString(m, "username"),
+		Password:          getString(m, "password"),
+		Token:             getString(m, "token"),
 	}
 	if value, ok := m["size"]; ok && value != nil && strings.TrimSpace(getString(m, "size")) != "" {
 		size, err := filemove.ParseSize(value)

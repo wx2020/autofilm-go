@@ -115,6 +115,33 @@ func TestParseSize(t *testing.T) {
 	}
 }
 
+func TestMoveRenamesFileBeforeMove(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	target := filepath.Join(root, "target")
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(source, "hhd880.com@ipx111-c.mp4"), "video")
+
+	mover, err := New(&Config{
+		SourceDir:         source,
+		TargetDir:         target,
+		RenameRegex:       `^hhd880\.com@`,
+		RenameReplacement: "",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := mover.Move(context.Background())
+	if err != nil || report.Renamed != 1 || report.Moved != 1 {
+		t.Fatalf("rename move failed: report=%+v err=%v", report, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "ipx111-c.mp4")); err != nil {
+		t.Fatalf("renamed file was not moved: %v", err)
+	}
+}
+
 func TestNewRejectsTargetInsideSource(t *testing.T) {
 	root := t.TempDir()
 	_, err := New(&Config{

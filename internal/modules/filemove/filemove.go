@@ -21,23 +21,25 @@ import (
 // Size, when set, is an exact size in bytes. A zero MinSize or MaxSize means
 // that the corresponding bound is not set.
 type Config struct {
-	ID         string
-	Enable     bool
-	RunOnStart bool
-	SourceDir  string
-	TargetDir  string
-	Regex      string
-	Size       *int64
-	MinSize    int64
-	MaxSize    int64
-	Overwrite  bool
-	Flatten    bool
-	Cron       string
-	Backend    string
-	URL        string
-	Username   string
-	Password   string
-	Token      string
+	ID                string
+	Enable            bool
+	RunOnStart        bool
+	SourceDir         string
+	TargetDir         string
+	Regex             string
+	Size              *int64
+	MinSize           int64
+	MaxSize           int64
+	Overwrite         bool
+	Flatten           bool
+	RenameRegex       string
+	RenameReplacement string
+	Cron              string
+	Backend           string
+	URL               string
+	Username          string
+	Password          string
+	Token             string
 }
 
 // ParseSize parses a byte size such as 1073741824, 50KB, 500MB or 1GB.
@@ -99,6 +101,7 @@ type MoveReport struct {
 	Scanned int
 	Matched int
 	Moved   int
+	Renamed int
 	Skipped int
 	Errors  []error
 }
@@ -114,6 +117,7 @@ type FileMover struct {
 	sourceDir string
 	targetDir string
 	pattern   *regexp.Regexp
+	rename    *regexp.Regexp
 	client    *alist.AlistClient
 }
 
@@ -178,12 +182,20 @@ func New(cfg *Config) (*FileMover, error) {
 			return nil, fmt.Errorf("compile regex: %w", err)
 		}
 	}
+	var renamePattern *regexp.Regexp
+	if strings.TrimSpace(cfg.RenameRegex) != "" {
+		renamePattern, err = regexp.Compile(cfg.RenameRegex)
+		if err != nil {
+			return nil, fmt.Errorf("compile rename_regex: %w", err)
+		}
+	}
 
 	mover := &FileMover{
 		config:    *cfg,
 		sourceDir: sourceDir,
 		targetDir: targetDir,
 		pattern:   pattern,
+		rename:    renamePattern,
 	}
 	if backend == "openlist" {
 		client, err := alist.GetClient(cfg.URL, cfg.Username, cfg.Password, cfg.Token)
@@ -236,7 +248,30 @@ func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
 		}
 
 		report.Scanned++
-		fileInfo, err := entry.Info()
+		if m.rename != nil {
+			oldName := entry.Name()
+			newName := m.rename.ReplaceAllString(oldName, m.config.RenameReplacement)
+			if newName != "" && newName != oldName {
+				renamed := filepath.Join(filepath.Dir(path), newName)
+				if _, err := os.Lstat(renamed); err == nil {
+					if !m.config.Overwrite {
+						report.Skipped++
+						return nil
+					}
+					if err := os.Remove(renamed); err != nil {
+						report.Errors = append(report.Errors, fmt.Errorf("remove existing rename target %s: %w", renamed, err))
+						return nil
+					}
+				}
+				if err := os.Rename(path, renamed); err != nil {
+					report.Errors = append(report.Errors, fmt.Errorf("rename %s to %s: %w", path, renamed, err))
+					return nil
+				}
+				report.Renamed++
+				path = renamed
+			}
+		}
+		fileInfo, err := os.Stat(path)
 		if err != nil {
 			report.Errors = append(report.Errors, fmt.Errorf("stat %s: %w", path, err))
 			return nil
@@ -294,6 +329,28 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			rel = strings.TrimPrefix(file.FullPath, "/")
 		}
 		report.Scanned++
+		if m.rename != nil {
+			newName := m.rename.ReplaceAllString(file.Name, m.config.RenameReplacement)
+			if newName != "" && newName != file.Name {
+				newPath := joinRemotePath(pathDir(file.FullPath), newName)
+				if existing, err := m.client.FSGet(ctx, newPath); err == nil && existing != nil {
+					if !m.config.Overwrite {
+						report.Skipped++
+						continue
+					}
+					if err := m.client.FSRemove(ctx, pathDir(newPath), []string{pathBase(newPath)}); err != nil {
+						report.Errors = append(report.Errors, fmt.Errorf("remove existing rename target %s: %w", newPath, err))
+						continue
+					}
+				}
+				if err := m.client.FSRename(ctx, file.FullPath, newName); err != nil {
+					report.Errors = append(report.Errors, fmt.Errorf("rename %s to %s: %w", file.FullPath, newPath, err))
+					continue
+				}
+				file.FullPath, file.Name, rel = newPath, newName, filepath.ToSlash(filepath.Join(filepath.Dir(rel), newName))
+				report.Renamed++
+			}
+		}
 		if !m.matches(rel, file.Size) {
 			continue
 		}

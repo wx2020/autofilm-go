@@ -140,6 +140,11 @@ func validateModuleConfig(typ string, cfg map[string]interface{}) error {
 				return fmt.Errorf("regex 表达式无效: %w", err)
 			}
 		}
+		if renameRegex := strings.TrimSpace(fmt.Sprint(cfg["rename_regex"])); renameRegex != "" {
+			if _, err := regexp.Compile(renameRegex); err != nil {
+				return fmt.Errorf("rename_regex must be valid: %w", err)
+			}
+		}
 		for _, key := range []string{"size", "min_size", "max_size"} {
 			if value, exists := cfg[key]; exists && value != nil && strings.TrimSpace(fmt.Sprint(value)) != "" {
 				if _, err := filemove.ParseSize(value); err != nil {

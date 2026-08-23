@@ -78,6 +78,8 @@ FileMoveList:
     source_dir: "D:/downloads"
     target_dir: "D:/media"
     regex: "(?i)\\.(mkv|mp4)$"
+    rename_regex: "^hhd880\\.com@" # 移动前匹配文件名
+    rename_replacement: ""           # 留空表示删除匹配部分
     size: null             # 精确大小；支持 1073741824、50KB、500MB、1GB
     min_size: 0            # 最小大小；0 表示不限制
     max_size: 0            # 最大大小；0 表示不限制
@@ -93,6 +95,8 @@ FileMoveList:
 | `source_dir` | 本地源目录，必须存在且为目录 |
 | `target_dir` | 本地目标目录，不允许位于源目录内部 |
 | `regex` | 匹配相对路径的 Go 正则表达式，可为空 |
+| `rename_regex` | 移动前匹配文件名的 Go 正则表达式，可为空 |
+| `rename_replacement` | 重命名正则的替换文本；留空表示删除匹配部分 |
 | `size` | 精确文件大小，支持字节数和 `KB`/`MB`/`GB`/`TB`，可为空 |
 | `min_size` | 最小文件大小，支持字节数和 `KB`/`MB`/`GB`/`TB`；`0` 表示不限制 |
 | `max_size` | 最大文件大小，支持字节数和 `KB`/`MB`/`GB`/`TB`；`0` 表示不限制 |
@@ -101,6 +105,8 @@ FileMoveList:
 | `cron` | 定时表达式，支持秒字段 |
 
 FileMove 默认跳过符号链接和非普通文件。跨文件系统移动时会先复制到目标目录的临时文件，完成后再删除源文件。
+
+设置 `rename_regex` 后，FileMove 会在移动前对文件名执行正则替换，不修改目录名。例如 `hhd880.com@ipx111-c.mp4` 配置 `rename_regex: "^hhd880\\.com@"`、`rename_replacement: ""` 后会以 `ipx111-c.mp4` 移动。
 
 ### FileMove OpenList 模式
 
