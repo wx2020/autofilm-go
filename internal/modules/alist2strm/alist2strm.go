@@ -291,6 +291,24 @@ func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
 	var added, modified, deleted []string
 	if oldSnap != nil {
 		added, modified, deleted = DiffSnapshots(oldSnap, newSnap)
+		// 远端文件未变化并不代表本地输出文件仍然存在。
+		// 例如用户手动删除了 .strm，此时需要重新加入处理队列。
+		for i := range files {
+			file := &files[i]
+			oldEntry, exists := oldSnap.Files[file.FullPath]
+			newEntry, present := newSnap.Files[file.FullPath]
+			if !exists || !present {
+				continue
+			}
+			if oldEntry.Size != newEntry.Size || oldEntry.Modified != newEntry.Modified {
+				continue
+			}
+			localPath := a2s.getLocalPath(file)
+			if _, err := os.Stat(localPath); os.IsNotExist(err) {
+				modified = append(modified, file.FullPath)
+				a2s.logger.Infof("本地输出文件不存在，重新处理: %s", localPath)
+			}
+		}
 	} else {
 		a2s.logger.Info("无历史快照，首次运行全量处理")
 		for path := range newSnap.Files {
