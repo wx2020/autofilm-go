@@ -176,19 +176,23 @@ func (a2s *Alist2Strm) runFull(ctx context.Context) error {
 
 	// 第一阶段：遍历并处理普通文件
 	outCh, errCh := a2s.client.IterPath(ctx, a2s.config.SourceDir, waitTime, a2s.mode == RawURLMode, filterFunc)
+	scanComplete := true
 
-	for {
+	for outCh != nil || errCh != nil {
 		select {
 		case path, ok := <-outCh:
 			if !ok {
-				goto Done
+				outCh = nil
+				continue
 			}
 			pathCh <- path
 
 		case err, ok := <-errCh:
 			if !ok {
-				goto Done
+				errCh = nil
+				continue
 			}
+			scanComplete = false
 			a2s.logger.Errorf("遍历路径出错: %v", err)
 
 		case <-ctx.Done():
@@ -197,8 +201,6 @@ func (a2s *Alist2Strm) runFull(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
-
-Done:
 	close(pathCh)
 	wg.Wait()
 
@@ -239,12 +241,14 @@ Done:
 	}
 
 	// 同步服务器（清理本地文件）
-	if a2s.config.SyncServer {
+	if a2s.config.SyncServer && scanComplete {
 		if err := a2s.cleanupLocalFiles(ctx); err != nil {
 			a2s.logger.Errorf("清理本地文件失败: %v", err)
 		} else {
 			a2s.logger.Info("清理过期的.strm文件完成")
 		}
+	} else if a2s.config.SyncServer {
+		a2s.logger.Warn("本次扫描未完整成功，跳过本地文件清理")
 	}
 
 	a2s.logger.Info("Alist2Strm全量扫描完成")
