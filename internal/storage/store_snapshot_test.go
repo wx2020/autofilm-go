@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"os"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 func setupTestDB(t *testing.T) (*Store, func()) {
@@ -13,7 +15,7 @@ func setupTestDB(t *testing.T) (*Store, func()) {
 	}
 	tmpFile.Close()
 
-	db, err := sql.Open("sqlite3", tmpFile.Name())
+	db, err := sql.Open("sqlite", tmpFile.Name())
 	if err != nil {
 		os.Remove(tmpFile.Name())
 		t.Fatal(err)
