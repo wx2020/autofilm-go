@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -162,15 +163,22 @@ func (s *Store) QueryRow(query string, args ...interface{}) *sql.Row {
 	return s.db.QueryRow(query, args...)
 }
 
-var globalStore *Store
+var (
+	globalStore *Store
+	storeMu    sync.RWMutex
+)
 
 // SetGlobalStore 设置全局 Store 实例（供模块使用）
 func SetGlobalStore(s *Store) {
+	storeMu.Lock()
+	defer storeMu.Unlock()
 	globalStore = s
 }
 
 // GlobalStore 获取全局 Store 实例（可能为 nil，表示 DB 不可用）
 func GlobalStore() *Store {
+	storeMu.RLock()
+	defer storeMu.RUnlock()
 	return globalStore
 }
 
@@ -374,7 +382,7 @@ type SnapshotEntry struct {
 	Sign     string
 }
 
-// SaveSnapshot 批量保存快照（事务替换）
+// SaveSnapshot 批量保存快照（使用 UPDATE + INSERT 避免数据丢失）
 func (s *Store) SaveSnapshot(configID int64, entries []SnapshotEntry) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -382,19 +390,19 @@ func (s *Store) SaveSnapshot(configID int64, entries []SnapshotEntry) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec("DELETE FROM alist2strm_snapshots WHERE config_id = ?", configID); err != nil {
-		return err
-	}
-
-	stmt, err := tx.Prepare("INSERT INTO alist2strm_snapshots (config_id, path, size, modified, sign) VALUES (?, ?, ?, ?, ?)")
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
 	for _, e := range entries {
-		if _, err := stmt.Exec(configID, e.Path, e.Size, e.Modified, e.Sign); err != nil {
+		result, err := tx.Exec(`UPDATE alist2strm_snapshots SET size=?, modified=?, sign=?
+			WHERE config_id=? AND path=?`, e.Size, e.Modified, e.Sign, configID, e.Path)
+		if err != nil {
 			return err
+		}
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			_, err = tx.Exec(`INSERT INTO alist2strm_snapshots (config_id, path, size, modified, sign)
+				VALUES (?, ?, ?, ?, ?)`, configID, e.Path, e.Size, e.Modified, e.Sign)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -565,19 +573,19 @@ func (s *Store) GetSyncTaskByID(id int64) (*SyncTaskRow, error) {
 	return t, nil
 }
 
-// UpsertSyncTask 更新或插入同步任务（按 dst_path 匹配）
+// UpsertSyncTask 更新或插入同步任务（按 dst_path 匹配，使用原子操作避免竞态）
 func (s *Store) UpsertSyncTask(t *SyncTaskRow) error {
-	existing, err := s.GetSyncTaskByDstPath(t.DstPath)
-	if err == nil {
-		t.ID = existing.ID
-		return s.UpdateSyncTask(t)
-	}
-
-	if err != sql.ErrNoRows {
-		return err
-	}
-
-	_, err = s.CreateSyncTask(t)
+	_, err := s.db.Exec(`INSERT INTO sync_tasks (sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(dst_path) DO UPDATE SET
+			config_uid=excluded.config_uid,
+			state=excluded.state,
+			alist_task_id=excluded.alist_task_id,
+			attempts=excluded.attempts,
+			last_error=excluded.last_error,
+			next_retry_at=excluded.next_retry_at,
+			updated_at=CURRENT_TIMESTAMP`,
+		t.SyncConfigID, t.ConfigUID, t.SrcPath, t.DstPath, t.State, t.AlistTaskID, t.Attempts, t.LastError, t.NextRetryAt)
 	return err
 }
 

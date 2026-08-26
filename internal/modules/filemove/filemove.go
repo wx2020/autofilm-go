@@ -377,13 +377,11 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			destinationRel = pathBase(rel)
 		}
 		destination := joinRemotePath(targetDir, destinationRel)
+		var existingExists bool
 		if existing, err := m.client.FSGet(ctx, destination); err == nil && existing != nil {
+			existingExists = true
 			if !m.config.Overwrite {
 				report.Skipped++
-				continue
-			}
-			if err := m.client.FSRemove(ctx, pathDir(destination), []string{pathBase(destination)}); err != nil {
-				report.Errors = append(report.Errors, fmt.Errorf("remove existing %s: %w", destination, err))
 				continue
 			}
 		}
@@ -394,6 +392,11 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 		if err := m.client.FSMove(ctx, pathDir(file.FullPath), pathDir(destination), []string{pathBase(file.FullPath)}); err != nil {
 			report.Errors = append(report.Errors, fmt.Errorf("move %s to %s: %w", file.FullPath, destination, err))
 			continue
+		}
+		if existingExists {
+			if err := m.client.FSRemove(ctx, pathDir(destination), []string{pathBase(destination)}); err != nil {
+				report.Errors = append(report.Errors, fmt.Errorf("remove existing file after move %s: %w", destination, err))
+			}
 		}
 		report.Moved++
 		movedDirs[pathDir(file.FullPath)]++

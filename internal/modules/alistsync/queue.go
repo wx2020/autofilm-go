@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/akimio/autofilm/internal/storage"
+	"github.com/sirupsen/logrus"
 )
 
 // SyncTask 同步任务
@@ -30,12 +31,13 @@ type SyncTask struct {
 // QueueManager 重试队列管理器
 type QueueManager struct {
 	queueDir string
+	logger   *logrus.Logger
 }
 
 // NewQueueManager 创建队列管理器
-func NewQueueManager(queueDir string) *QueueManager {
+func NewQueueManager(queueDir string, logger *logrus.Logger) *QueueManager {
 	os.MkdirAll(queueDir, 0755)
-	return &QueueManager{queueDir: queueDir}
+	return &QueueManager{queueDir: queueDir, logger: logger}
 }
 
 // taskFilePath 返回任务文件路径
@@ -44,11 +46,17 @@ func (qm *QueueManager) taskFilePath(taskID string) string {
 }
 
 // Save 保存同步任务
-// 优先写入数据库，回退到 JSON 文件
+// 优先写入数据库，回退到 JSON 文件；数据库成功后同步更新文件备份
 func (qm *QueueManager) Save(task *SyncTask) error {
 	task.UpdatedAt = time.Now()
 	if store := storage.GlobalStore(); store != nil {
-		return qm.dbSave(store, task)
+		if err := qm.dbSave(store, task); err != nil {
+			return err
+		}
+		if err := qm.fileSave(task); err != nil {
+			qm.logger.Warnf("同步更新任务文件失败 %s: %v", task.ID, err)
+		}
+		return nil
 	}
 	return qm.fileSave(task)
 }

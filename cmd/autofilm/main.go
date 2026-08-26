@@ -43,31 +43,35 @@ func main() {
 	database, err := storage.InitDB(dbCfg)
 	if err != nil {
 		fmt.Printf("初始化数据库失败: %v\n", err)
-	} else {
-		// 执行数据库迁移
-		if err := storage.RunMigrations(database); err != nil {
-			fmt.Printf("数据库迁移失败: %v\n", err)
-		}
+		os.Exit(1)
+	}
 
-		// 加载/生成加密密钥
-		key, err := storage.LoadOrCreateKey(dataDir)
-		if err != nil {
-			fmt.Printf("初始化加密密钥失败: %v\n", err)
-		}
+	// 执行数据库迁移
+	if err := storage.RunMigrations(database); err != nil {
+		fmt.Printf("数据库迁移失败: %v\n", err)
+		os.Exit(1)
+	}
 
-		dbStore = storage.NewStore(database, key)
-		storage.SetGlobalStore(dbStore)
-		if err := dbStore.MigrateModuleType("alissync", "alistsync"); err != nil {
-			fmt.Printf("模块类型迁移失败: %v\n", err)
-		}
-		if appSettings, err := dbStore.GetAppSettings(); err == nil {
-			settings.ApplyRuntimeSettings(appSettings.Debug, appSettings.Timezone)
-		}
-		if imported, err := storage.ImportLegacyYAML(dbStore, settings.GetConfigFile()); err != nil {
-			fmt.Printf("旧 YAML 配置迁移失败: %v\n", err)
-		} else if imported > 0 {
-			fmt.Printf("已将 %d 条旧 YAML 模块配置迁移到 SQLite\n", imported)
-		}
+	// 加载/生成加密密钥
+	key, err := storage.LoadOrCreateKey(dataDir)
+	if err != nil {
+		fmt.Printf("初始化加密密钥失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	dbStore = storage.NewStore(database, key)
+	storage.SetGlobalStore(dbStore)
+	if err := dbStore.MigrateModuleType("alissync", "alistsync"); err != nil {
+		fmt.Printf("模块类型迁移失败: %v\n", err)
+		os.Exit(1)
+	}
+	if appSettings, err := dbStore.GetAppSettings(); err == nil {
+		settings.ApplyRuntimeSettings(appSettings.Debug, appSettings.Timezone)
+	}
+	if imported, err := storage.ImportLegacyYAML(dbStore, settings.GetConfigFile()); err != nil {
+		fmt.Printf("旧 YAML 配置迁移失败: %v\n", err)
+	} else if imported > 0 {
+		fmt.Printf("已将 %d 条旧 YAML 模块配置迁移到 SQLite\n", imported)
 	}
 
 	// SQLite 设置加载完成后初始化日志，使调试模式立即生效。

@@ -105,7 +105,7 @@ func (as *Alissync) syncPair(ctx context.Context, pair PairConfig) error {
 			DstPath:      dstPath,
 			RawURL:       f.RawURL,
 			AlistTaskID:  taskID,
-			State:        "running",
+			State:        "pending",
 			Attempts:     0,
 			CreatedAt:    time.Now(),
 		}

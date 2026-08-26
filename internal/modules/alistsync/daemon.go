@@ -2,6 +2,7 @@ package alistsync
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -120,15 +121,15 @@ func (d *RetryDaemon) pollTasks(ctx context.Context) {
 		}
 
 		switch task.State {
-		case "running":
-			d.checkRunningTask(ctx, task)
+		case "pending", "running":
+			d.checkPendingTask(ctx, task)
 		case "failed":
 			d.checkRetryTask(ctx, task)
 		}
 	}
 }
 
-func (d *RetryDaemon) checkRunningTask(ctx context.Context, task *SyncTask) {
+func (d *RetryDaemon) checkPendingTask(ctx context.Context, task *SyncTask) {
 	if task.AlistTaskID == "" {
 		return
 	}
@@ -141,6 +142,17 @@ func (d *RetryDaemon) checkRunningTask(ctx context.Context, task *SyncTask) {
 
 	switch info.State {
 	case "succeeded":
+		if _, err := d.client.FSGet(ctx, task.DstPath); err != nil {
+			d.logger.Warnf("Alist 报告成功但目标文件不存在: %s, 错误: %v", task.DstPath, err)
+			task.Attempts++
+			task.LastError = fmt.Sprintf("目标文件验证失败: %v", err)
+			task.State = "failed"
+			task.NextRetryAt = d.calcNextRetry(task.Attempts)
+			if err := d.queue.Save(task); err != nil {
+				d.logger.Errorf("保存任务状态失败 %s: %v", task.ID, err)
+			}
+			return
+		}
 		task.State = "succeeded"
 		task.LastError = ""
 		if err := d.queue.Save(task); err != nil {

@@ -130,10 +130,9 @@ func (c *HTTPClient) Request(ctx context.Context, method, url string, headers ma
 			continue
 		}
 
-		defer resp.Body.Close()
-
 		// 读取响应体
 		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			lastErr = err
 			c.logger.Debugf("读取响应体失败 %s: %v", url, err)
@@ -186,6 +185,7 @@ func (c *HTTPClient) Head(ctx context.Context, url string, headers map[string]st
 // Download 下载文件到指定路径
 func (c *HTTPClient) Download(ctx context.Context, url, filePath string, headers map[string]string) error {
 	var lastErr error
+	var out *os.File
 
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
@@ -209,23 +209,30 @@ func (c *HTTPClient) Download(ctx context.Context, url, filePath string, headers
 			continue
 		}
 
-		defer resp.Body.Close()
-
 		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
 			lastErr = fmt.Errorf("下载失败，状态码: %d", resp.StatusCode)
 			continue
 		}
 
+		// 如果上次迭代创建了文件，先关闭它
+		if out != nil {
+			out.Close()
+		}
+
 		// 创建文件
-		out, err := os.Create(filePath)
+		out, err = os.Create(filePath)
 		if err != nil {
+			resp.Body.Close()
 			return fmt.Errorf("创建文件失败: %w", err)
 		}
-		defer out.Close()
 
 		// 写入文件
 		_, err = io.Copy(out, resp.Body)
+		resp.Body.Close()
 		if err != nil {
+			out.Close()
+			out = nil
 			lastErr = err
 			continue
 		}

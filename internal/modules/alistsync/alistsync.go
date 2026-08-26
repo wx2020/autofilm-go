@@ -58,7 +58,7 @@ func New(cfg *Config) (*Alissync, error) {
 
 	settings := core.GetSettings()
 	syncQueueDir := filepath.Join(settings.GetConfigDir(), "sync_queue")
-	queue := NewQueueManager(syncQueueDir)
+	queue := NewQueueManager(syncQueueDir, core.GetLogger())
 
 	if cfg.Retry.MaxAttempts <= 0 {
 		cfg.Retry.MaxAttempts = 10

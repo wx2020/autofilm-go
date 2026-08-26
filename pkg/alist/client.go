@@ -139,10 +139,21 @@ func GetClient(url, username, password, token string) (*AlistClient, error) {
 	}
 	url = trimRight(url, "/")
 
+	key := url + ":" + username
+
+	// 快速路径：已有客户端直接返回（读锁）
+	clientsMu.RLock()
+	if client, exists := clients[key]; exists {
+		clientsMu.RUnlock()
+		return client, nil
+	}
+	clientsMu.RUnlock()
+
+	// 创建新客户端（写锁）
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 
-	key := url + ":" + username
+	// 二次检查：可能在等待锁期间被其他协程创建
 	if client, exists := clients[key]; exists {
 		return client, nil
 	}
@@ -377,8 +388,8 @@ func (c *AlistClient) FSList(ctx context.Context, dirPath string) ([]AlistPath, 
 					result.Content[i].Sign = fileDetail.Sign
 				}
 				c.logger.Debugf("[DEBUG] 文件: %s", result.Content[i].Name)
-				c.logger.Debugf("[DEBUG]   RawURL: %s", result.Content[i].RawURL)
-				c.logger.Debugf("[DEBUG]   Sign: %s", result.Content[i].Sign)
+				c.logger.Debugf("[DEBUG]   RawURL: %s", maskURL(result.Content[i].RawURL))
+				c.logger.Debugf("[DEBUG]   Sign: %s", maskURL(result.Content[i].Sign))
 			} else {
 				c.logger.Warnf("[WARN] 获取文件下载链接失败: %s, 错误: %v", fullPath, err)
 			}
@@ -462,7 +473,7 @@ func (c *AlistClient) FSGet(ctx context.Context, path string) (*AlistPath, error
 	result.BasePath = c.basePath
 	result.FullPath = path
 
-	c.logger.Debugf("[DEBUG] FSGet 解析后 - RawURL: '%s'", result.RawURL)
+	c.logger.Debugf("[DEBUG] FSGet 解析后 - RawURL: '%s'", maskURL(result.RawURL))
 
 	return &result, nil
 }
@@ -719,4 +730,14 @@ func trimRight(s, cutset string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+func maskURL(url string) string {
+	if url == "" {
+		return ""
+	}
+	if len(url) > 50 {
+		return url[:50] + "..."
+	}
+	return url
 }

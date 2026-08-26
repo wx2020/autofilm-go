@@ -266,16 +266,15 @@ func (s *Store) ImportBackup(b *Backup) error {
 	if b.Version != 1 {
 		return fmt.Errorf("不支持的备份版本")
 	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
+
+	// 先在事务外准备所有加密数据，避免事务开始后加密失败导致数据丢失
+	type encryptedConfig struct {
+		typ     string
+		id      string
+		payload string
 	}
-	defer tx.Rollback()
-	settingsJSON, _ := json.Marshal(b.Settings)
-	if _, err = tx.Exec(`INSERT INTO app_settings(key,value) VALUES('settings',?)
-		ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP`, string(settingsJSON)); err != nil {
-		return err
-	}
+	var encrypted []encryptedConfig
+
 	for typ, configs := range b.ModuleConfigs {
 		if typ == "alissync" {
 			typ = "alistsync"
@@ -283,20 +282,43 @@ func (s *Store) ImportBackup(b *Backup) error {
 		if typ != "alist2strm" && typ != "ani2alist" && typ != "libraryposter" && typ != "alistsync" {
 			continue
 		}
-		if _, err = tx.Exec("DELETE FROM module_configs WHERE module_type=?", typ); err != nil {
-			return err
-		}
 		for _, cfg := range configs {
 			id := fmt.Sprint(cfg["id"])
 			data, _ := json.Marshal(cfg)
-			payload, encErr := Encrypt(s.key, string(data))
-			if encErr != nil {
-				return encErr
+			payload, err := Encrypt(s.key, string(data))
+			if err != nil {
+				return fmt.Errorf("加密配置 %s/%s 失败: %w", typ, id, err)
 			}
-			if _, err = tx.Exec("INSERT INTO module_configs(module_type,cfg_id,payload) VALUES(?,?,?)", typ, id, payload); err != nil {
-				return err
-			}
+			encrypted = append(encrypted, encryptedConfig{typ, id, payload})
 		}
 	}
+
+	// 开始事务执行数据库操作
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	settingsJSON, _ := json.Marshal(b.Settings)
+	if _, err = tx.Exec(`INSERT INTO app_settings(key,value) VALUES('settings',?)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP`, string(settingsJSON)); err != nil {
+		return err
+	}
+
+	// 按类型删除旧配置（只删除我们支持的类型）
+	for _, typ := range []string{"alist2strm", "ani2alist", "libraryposter", "alistsync"} {
+		if _, err = tx.Exec("DELETE FROM module_configs WHERE module_type=?", typ); err != nil {
+			return err
+		}
+	}
+
+	// 插入加密后的配置
+	for _, ec := range encrypted {
+		if _, err = tx.Exec("INSERT INTO module_configs(module_type,cfg_id,payload) VALUES(?,?,?)", ec.typ, ec.id, ec.payload); err != nil {
+			return err
+		}
+	}
+
 	return tx.Commit()
 }
