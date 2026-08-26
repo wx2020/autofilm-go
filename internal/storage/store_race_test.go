@@ -3,7 +3,6 @@ package storage
 import (
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestGlobalStoreRace(t *testing.T) {
@@ -49,13 +48,15 @@ func TestConcurrentSetGlobalStore(t *testing.T) {
 		globalStore = originalStore
 	}()
 
-	done := make(chan bool)
+	var wg sync.WaitGroup
+	done := make(chan bool, 100)
 
 	for i := 0; i < 100; i++ {
+		wg.Add(1)
 		go func(id int) {
+			defer wg.Done()
 			s := &Store{}
 			SetGlobalStore(s)
-			time.Sleep(time.Microsecond)
 			got := GlobalStore()
 			if got != s {
 				t.Errorf("goroutine %d: 期望获取到设置的 Store，实际获取到 %v", id, got)
@@ -64,7 +65,12 @@ func TestConcurrentSetGlobalStore(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < 100; i++ {
-		<-done
+	wg.Wait()
+	close(done)
+
+	for d := range done {
+		if !d {
+			t.Error("收到错误信号")
+		}
 	}
 }
