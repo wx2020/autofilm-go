@@ -77,11 +77,8 @@ jobs:
       - name: GlobalStore concurrent stress test
         run: go test -race -count=100 -v ./internal/storage/ -run TestConcurrentSetGlobalStore
 
-      - name: GetClient race stress test
-        run: go test -race -count=100 -v ./pkg/alist/ -run TestGetClientRace
+      - name: Clients map access test
+        run: go test -race -count=100 -v ./pkg/alist/ -run TestClientsMapAccess
 
-      - name: GetClient duplicate creation test
-        run: go test -race -count=100 -v ./pkg/alist/ -run TestGetClientDuplicateCreation
-
-      - name: SaveSnapshot integrity test
+      - name: SaveSnapshot stress test
         run: go test -race -count=50 -v ./internal/storage/ -run TestSaveSnapshot
