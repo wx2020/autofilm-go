@@ -8,11 +8,19 @@ import (
 func TestEncryptDecrypt(t *testing.T) {
 	key := bytes.Repeat([]byte{7}, 32)
 	encoded, err := Encrypt(key, "secret-token")
-	if err != nil { t.Fatal(err) }
-	if encoded == "secret-token" { t.Fatal("ciphertext equals plaintext") }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded == "secret-token" {
+		t.Fatal("ciphertext equals plaintext")
+	}
 	plain, err := Decrypt(key, encoded)
-	if err != nil { t.Fatal(err) }
-	if plain != "secret-token" { t.Fatalf("plain = %q", plain) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain != "secret-token" {
+		t.Fatalf("plain = %q", plain)
+	}
 }
 
 func TestDecryptRejectsWrongKey(t *testing.T) {
@@ -24,7 +32,13 @@ func TestDecryptRejectsWrongKey(t *testing.T) {
 
 func TestPasswordHash(t *testing.T) {
 	hash, err := HashPassword("strong-password")
-	if err != nil { t.Fatal(err) }
-	if !VerifyPassword(hash, "strong-password") { t.Fatal("valid password rejected") }
-	if VerifyPassword(hash, "wrong-password") { t.Fatal("invalid password accepted") }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !VerifyPassword(hash, "strong-password") {
+		t.Fatal("valid password rejected")
+	}
+	if VerifyPassword(hash, "wrong-password") {
+		t.Fatal("invalid password accepted")
+	}
 }

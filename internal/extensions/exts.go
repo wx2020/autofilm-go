@@ -30,8 +30,8 @@ var (
 
 	// ImageExts 图片文件后缀
 	ImageExts = map[string]bool{
-		".png": true,
-		".jpg": true,
+		".png":  true,
+		".jpg":  true,
 		".jpeg": true,
 	}
 

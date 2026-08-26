@@ -15,6 +15,7 @@ type Server struct {
 	httpServer *http.Server
 	webConfig  *WebConfig
 	logger     *logrus.Logger
+	logins     *loginLimiter
 }
 
 // NewServer 创建 Web 服务器
@@ -22,6 +23,7 @@ func NewServer(cfg *WebConfig) *Server {
 	s := &Server{
 		webConfig: cfg,
 		logger:    core.GetLogger(),
+		logins:    newLoginLimiter(),
 	}
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),

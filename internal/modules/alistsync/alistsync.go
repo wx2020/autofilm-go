@@ -37,6 +37,7 @@ type Config struct {
 	Pairs      []PairConfig
 	Retry      RetryConfig
 	WaitTime   float64
+	QPSLimit   int // 对 OpenList API 的限流（次/秒），0 表示不限流
 	Cron       string
 }
 
@@ -55,6 +56,10 @@ func New(cfg *Config) (*Alissync, error) {
 	if err != nil {
 		return nil, fmt.Errorf("创建Alist客户端失败: %w", err)
 	}
+
+	// 声明本任务的限流策略（0 表示不限流）。
+	// 共享同一服务器+凭据的多个任务共用一个限流器，后启动者的配置生效。
+	client.SetRateLimit(cfg.QPSLimit)
 
 	settings := core.GetSettings()
 	syncQueueDir := filepath.Join(settings.GetConfigDir(), "sync_queue")

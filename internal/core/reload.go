@@ -3,8 +3,8 @@ package core
 import "sync"
 
 var (
-	reloadCh     chan struct{}
-	reloadOnce   sync.Once
+	reloadCh   chan struct{}
+	reloadOnce sync.Once
 )
 
 // ReloadCh 返回一个全局配置重载信号 channel

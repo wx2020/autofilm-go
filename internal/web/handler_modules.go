@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/akimio/autofilm/internal/core"
 	"github.com/akimio/autofilm/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
@@ -87,6 +88,7 @@ func (s *Server) handleRunModule(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleToggleModule POST /api/modules/{type}/{id}/toggle
+// 同时更新内存状态并持久化 enable 字段到 SQLite，重启/热重载后保持。
 func (s *Server) handleToggleModule(w http.ResponseWriter, r *http.Request) {
 	typ := ModuleType(chi.URLParam(r, "type"))
 	id := chi.URLParam(r, "id")
@@ -97,10 +99,22 @@ func (s *Server) handleToggleModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry.Enabled = !entry.Enabled
+	newEnabled := !entry.Enabled
+	if !GetModuleRegistry().SetEnabled(typ, id, newEnabled) {
+		http.Error(w, `{"error":"模块未找到"}`, http.StatusNotFound)
+		return
+	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if store := storage.GlobalStore(); store != nil {
+		if err := store.UpdateModuleConfigField(string(typ), id, "enable", newEnabled); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "保存启用状态失败: "+err.Error())
+			return
+		}
+		core.TriggerReload()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
-		"enabled": entry.Enabled,
+		"enabled": newEnabled,
 	})
 }

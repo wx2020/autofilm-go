@@ -49,7 +49,7 @@ RUN apk add --no-cache ca-certificates tzdata
 ENV TZ=Asia/Shanghai
 
 # 创建目录
-RUN mkdir -p /config /logs /fonts /media /data
+RUN mkdir -p /config /logs /fonts /media /data /app/config /app/logs /app/data
 
 WORKDIR /app
 
@@ -58,6 +58,10 @@ COPY --from=builder /build/autofilm /app/autofilm
 
 # 设置权限
 RUN chmod +x /app/autofilm
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -q -O /dev/null "http://127.0.0.1:${AUTOFILM_WEB_PORT:-8080}/api/health" || exit 1
 
 # 挂载点
 VOLUME ["/app/config", "/app/logs", "/app/data", "/fonts", "/media"]

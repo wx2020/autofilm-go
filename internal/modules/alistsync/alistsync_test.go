@@ -2,12 +2,50 @@ package alistsync
 
 import (
 	"math/rand"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/akimio/autofilm/pkg/alist"
 	"github.com/sirupsen/logrus"
 )
+
+// TestNewAppliesQPSLimit 验证 alistsync 的 qps_limit 配置真实应用到共享客户端
+func TestNewAppliesQPSLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			w.Write([]byte(`{"code":200,"message":"ok","data":{"token":"tk"}}`))
+		case "/api/me":
+			w.Write([]byte(`{"code":200,"message":"ok","data":{"base_path":"/","id":1}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &Config{
+		ID:       "sync-a",
+		URL:      srv.URL,
+		Username: "user",
+		Password: "pass",
+		Retry:    RetryConfig{MaxAttempts: 10, Backoff: "expo"},
+		QPSLimit: 7,
+	}
+	if _, err := New(cfg); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// GetClient 返回的是与 New 共享的缓存实例，应能观察到限流策略
+	shared, err := alist.GetClient(srv.URL, "user", "pass", "")
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if got := shared.LimitQPS(); got != 7 {
+		t.Fatalf("LimitQPS() = %d, want 7", got)
+	}
+}
 
 func TestShouldOverwrite(t *testing.T) {
 	src := &alist.AlistPath{Modified: "2026-07-28T10:00:00Z"}

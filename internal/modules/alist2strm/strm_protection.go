@@ -13,20 +13,20 @@ import (
 
 // StrmProtectionManager STRM文件保护管理器
 type StrmProtectionManager struct {
-	targetDir   string
-	taskID      string
-	threshold   int
-	graceScans  int
-	stateFile   string
-	protected   map[string]int
-	mu          sync.RWMutex
-	logger      *logrus.Logger
+	targetDir  string
+	taskID     string
+	threshold  int
+	graceScans int
+	stateFile  string
+	protected  map[string]int
+	mu         sync.RWMutex
+	logger     *logrus.Logger
 }
 
 // ProtectionState 保护状态文件内容
 type ProtectionState struct {
-	Updated   string           `json:"updated"`
-	Protected map[string]int   `json:"protected"`
+	Updated   string         `json:"updated"`
+	Protected map[string]int `json:"protected"`
 }
 
 // NewStrmProtectionManager 创建STRM保护管理器

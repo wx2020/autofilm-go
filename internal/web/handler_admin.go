@@ -3,14 +3,78 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/akimio/autofilm/internal/core"
 	"github.com/akimio/autofilm/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
+
+// loginLimiter 内存登录限速器：按 IP+用户名统计连续失败次数，
+// 达到阈值后按指数退避锁定，成功登录即重置。
+type loginLimiter struct {
+	mu       sync.Mutex
+	failures map[string]*loginState
+}
+
+type loginState struct {
+	count int
+	until time.Time
+}
+
+func newLoginLimiter() *loginLimiter {
+	return &loginLimiter{failures: make(map[string]*loginState)}
+}
+
+func (l *loginLimiter) key(r *http.Request, username string) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return host + "|" + username
+}
+
+func (l *loginLimiter) allow(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	st, ok := l.failures[key]
+	if !ok {
+		return true
+	}
+	return !time.Now().Before(st.until)
+}
+
+func (l *loginLimiter) failure(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	st := l.failures[key]
+	if st == nil {
+		st = &loginState{}
+		l.failures[key] = st
+	}
+	st.count++
+	if st.count > 20 {
+		st.count = 20
+	}
+	if st.count < 5 {
+		return
+	}
+	backoff := 30 * time.Second << uint(st.count-5)
+	if backoff > 15*time.Minute {
+		backoff = 15 * time.Minute
+	}
+	st.until = time.Now().Add(backoff)
+}
+
+func (l *loginLimiter) success(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.failures, key)
+}
 
 func (s *Server) handleAuthStatus(w http.ResponseWriter, _ *http.Request) {
 	count := 0
@@ -26,18 +90,18 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusServiceUnavailable, "数据库不可用")
 		return
 	}
-	count, err := store.UserCount()
-	if err != nil || count != 0 {
-		writeJSONError(w, http.StatusConflict, "系统已经初始化")
-		return
-	}
 	var body struct{ Username, Password string }
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "请求格式无效")
 		return
 	}
-	user, err := store.CreateUser(body.Username, body.Password, "admin")
+	// 事务内校验并创建首个管理员，消除并发 bootstrap 竞态
+	user, err := store.BootstrapFirstUser(body.Username, body.Password)
 	if err != nil {
+		if err.Error() == "系统已经初始化" {
+			writeJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -52,15 +116,23 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	store := storage.GlobalStore()
 	var body struct{ Username, Password string }
-	if store == nil || json.NewDecoder(r.Body).Decode(&body) != nil {
+	if store == nil || json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body) != nil {
 		writeJSONError(w, http.StatusBadRequest, "请求格式无效")
+		return
+	}
+	// 登录限速：连续失败后按指数退避锁定，缓解暴力破解
+	key := s.logins.key(r, body.Username)
+	if !s.logins.allow(key) {
+		writeJSONError(w, http.StatusTooManyRequests, "尝试次数过多，请稍后再试")
 		return
 	}
 	user, err := store.Authenticate(body.Username, body.Password)
 	if err != nil {
+		s.logins.failure(key)
 		writeJSONError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
+	s.logins.success(key)
 	token, err := store.CreateSession(user.ID, 24*time.Hour)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
@@ -91,7 +163,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Username, Password, Role string }
-	if json.NewDecoder(r.Body).Decode(&body) != nil {
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body) != nil {
 		writeJSONError(w, http.StatusBadRequest, "请求格式无效")
 		return
 	}
@@ -110,7 +182,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		Enabled  bool   `json:"enabled"`
 		Password string `json:"password"`
 	}
-	if id < 1 || json.NewDecoder(r.Body).Decode(&body) != nil {
+	if id < 1 || json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body) != nil {
 		writeJSONError(w, http.StatusBadRequest, "请求格式无效")
 		return
 	}

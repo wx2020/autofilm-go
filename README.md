@@ -21,6 +21,9 @@ docker compose up -d
 
 默认访问地址为 <http://localhost:8080>。首次访问时创建管理员账户。
 
+> 安全提示：创建管理员之前，受保护的 API 均返回 401。公网部署建议同时设置
+> `AUTOFILM_WEB_TOKEN` 作为应急访问令牌。
+
 ### 本地运行
 
 先构建前端资源，再编译 Go 程序：
@@ -86,6 +89,7 @@ FileMoveList:
     max_size: 0            # 最大大小；0 表示不限制
     flatten: false         # 是否平铺到目标目录，不保留源目录层级
     overwrite: false       # 目标文件存在时是否覆盖
+    qps_limit: 0           # openlist 后端对 API 请求的限流（次/秒），0 表示不限流
     cron: "0 */10 * * * *"
 ```
 
@@ -104,6 +108,7 @@ FileMoveList:
 | `max_size` | 最大文件大小，支持字节数和 `KB`/`MB`/`GB`/`TB`；`0` 表示不限制 |
 | `flatten` | 是否将匹配文件直接移动到目标目录，不保留源目录层级 |
 | `overwrite` | 是否覆盖目标中的同名文件，默认 `false` |
+| `qps_limit` | OpenList 后端对 `/api/*` 请求的限流（次/秒），`0` 表示不限流；本地后端忽略 |
 | `cron` | 定时表达式，支持秒字段 |
 
 FileMove 默认跳过符号链接和非普通文件。跨文件系统移动时会先复制到目标目录的临时文件，完成后再删除源文件。启用 `remove_matched_dirs` 后，仅当目录内所有匹配文件均成功移动时才会删除该源子目录；匹配文件移动失败或跳过时会保留目录。删除目录时，其中未匹配的下载垃圾文件也会一并删除，源根目录不会删除。
@@ -115,6 +120,16 @@ FileMove 默认跳过符号链接和非普通文件。跨文件系统移动时�
 FileMove 的 `backend` 默认为 `local`。设置为 `openlist` 后，模块通过 OpenList API 递归扫描源目录，并按正则和文件大小筛选文件；目标目录不存在时会自动创建，移动使用同一个 OpenList 实例的 `fs/move` 接口。
 
 OpenList 模式需要额外配置 `url`、`username`/`password` 或 `token`，且 `source_dir`、`target_dir` 必须使用 OpenList 路径（以 `/` 开头）。FileMove 仅支持同一个 OpenList 实例内移动；跨 OpenList 实例的整目录同步仍使用 AlistSync。
+
+### AlistSync 与 FileMove 的 QPS 限流
+
+`alistsync` 和 `filemove`（`backend: openlist` 时）均支持 `qps_limit` 配置项，对发往 OpenList/Alist 服务器的 API 请求限流：
+
+```yaml
+qps_limit: 10   # 次/秒；0 或省略表示不限流
+```
+
+限流作用于 `/api/*` 接口调用（列表、详情、移动等），不作用于直链下载。同一服务器 + 同一凭据的多个任务共享一个限流器，后启动任务的配置生效。
 
 ### 环境变量
 
@@ -138,9 +153,9 @@ Docker Compose 会将 `config/`、`logs/` 和 `data/` 持久化到容器的 `/ap
 
 ## 监控与接口
 
-- Prometheus 指标：`GET /metrics`
+- Prometheus 指标：`GET /metrics`（需鉴权，携带 `Authorization: Bearer <token>` 或有效会话）
 - Web 指标：`GET /api/metrics`
-- 健康检查：`GET /api/health`
+- 健康检查（无需鉴权）：`GET /api/health`
 - 模块列表：`GET /api/modules`
 - 模块手动执行：`POST /api/modules/{type}/{id}/run`
 - 模块启停：`POST /api/modules/{type}/{id}/toggle`

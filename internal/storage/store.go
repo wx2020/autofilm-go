@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/akimio/autofilm/internal/core"
 )
 
 // Store 数据库 CRUD 操作封装
@@ -82,17 +84,58 @@ func (s *Store) ListModuleConfigs(moduleType string) ([]map[string]interface{}, 
 		if err := rows.Scan(&payload); err != nil {
 			return nil, err
 		}
-		plain, err := Decrypt(s.key, payload)
-		if err != nil {
-			return nil, err
+		// 单条配置损坏时跳过并告警，避免拖垮整个模块类型的加载
+		plain, decErr := Decrypt(s.key, payload)
+		if decErr != nil {
+			logStorageWarn("跳过无法解密的 %s 模块配置: %v", moduleType, decErr)
+			continue
 		}
 		var cfg map[string]interface{}
-		if err := json.Unmarshal([]byte(plain), &cfg); err != nil {
-			return nil, err
+		if jsonErr := json.Unmarshal([]byte(plain), &cfg); jsonErr != nil {
+			logStorageWarn("跳过无法解析的 %s 模块配置: %v", moduleType, jsonErr)
+			continue
 		}
 		result = append(result, cfg)
 	}
 	return result, rows.Err()
+}
+
+// logStorageWarn 存储层告警日志：logger 未初始化时退回 stdout
+func logStorageWarn(format string, args ...interface{}) {
+	if l := core.GetLogger(); l != nil {
+		l.Warnf(format, args...)
+		return
+	}
+	fmt.Printf("[WARN] "+format+"\n", args...)
+}
+
+// UpdateModuleConfigField 解密-修改-加密回写模块配置的单个字段
+// 用于持久化 toggle 等运行时状态，避免整体覆盖请求。
+func (s *Store) UpdateModuleConfigField(moduleType, id, key string, value interface{}) error {
+	var payload string
+	err := s.db.QueryRow("SELECT payload FROM module_configs WHERE module_type=? AND cfg_id=?", moduleType, id).Scan(&payload)
+	if err != nil {
+		return err
+	}
+	plain, err := Decrypt(s.key, payload)
+	if err != nil {
+		return err
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal([]byte(plain), &cfg); err != nil {
+		return err
+	}
+	cfg[key] = value
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	enc, err := Encrypt(s.key, string(data))
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`UPDATE module_configs SET payload=?, updated_at=CURRENT_TIMESTAMP WHERE module_type=? AND cfg_id=?`, enc, moduleType, id)
+	return err
 }
 
 // GetModuleConfigCreatedAt returns the database creation time of a module configuration.
@@ -165,7 +208,7 @@ func (s *Store) QueryRow(query string, args ...interface{}) *sql.Row {
 
 var (
 	globalStore *Store
-	storeMu    sync.RWMutex
+	storeMu     sync.RWMutex
 )
 
 // SetGlobalStore 设置全局 Store 实例（供模块使用）
@@ -199,8 +242,14 @@ type Connection struct {
 
 // CreateConnection 创建连接凭据，密码/令牌自动加密
 func (s *Store) CreateConnection(c *Connection) (int64, error) {
-	passEnc, _ := Encrypt(s.key, c.Password)
-	tokenEnc, _ := Encrypt(s.key, c.Token)
+	passEnc, err := Encrypt(s.key, c.Password)
+	if err != nil {
+		return 0, fmt.Errorf("加密密码失败: %w", err)
+	}
+	tokenEnc, err := Encrypt(s.key, c.Token)
+	if err != nil {
+		return 0, fmt.Errorf("加密令牌失败: %w", err)
+	}
 	res, err := s.db.Exec(`INSERT INTO alist_connections (name, url, username, password, token, public_url)
 		VALUES (?, ?, ?, ?, ?, ?)`, c.Name, c.URL, c.Username, passEnc, tokenEnc, c.PublicURL)
 	if err != nil {

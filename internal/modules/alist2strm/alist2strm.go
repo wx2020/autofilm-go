@@ -144,6 +144,13 @@ func (a2s *Alist2Strm) Run(ctx context.Context) error {
 func (a2s *Alist2Strm) runFull(ctx context.Context) error {
 	a2s.logger.Info("开始Alist2Strm全量扫描")
 
+	// 全量模式同样应用 QPS 限流，避免大目录扫描压垮服务器
+	qps := a2s.calcQPS()
+	if qps > 0 {
+		a2s.client.SetRateLimit(qps)
+		a2s.logger.Debugf("QPS限流已设置: %d", qps)
+	}
+
 	waitTime := time.Duration(a2s.config.WaitTime) * time.Second
 
 	// 创建worker池
@@ -284,6 +291,14 @@ func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
 
 	// 构建新快照
 	newSnap := BuildSnapshot(files)
+
+	// 远端成功响应但结果为空、且存在历史快照时，判定为数据源异常：
+	// 保留旧快照并跳过本轮清理，防止空列表触发全量误删
+	if len(newSnap.Files) == 0 && oldSnap != nil && len(oldSnap.Files) > 0 {
+		a2s.logger.Errorf("远端未返回任何文件（原快照 %d 个条目），疑似数据源异常：已保留旧快照并跳过本轮处理与清理",
+			len(oldSnap.Files))
+		return nil
+	}
 
 	startTime := time.Now()
 
@@ -495,7 +510,14 @@ func (a2s *Alist2Strm) processFile(ctx context.Context, path *alist.AlistPath) {
 
 	// 判断是创建.strm文件还是下载文件
 	if filepath.Ext(localPath) == ".strm" {
-		if err := os.WriteFile(localPath, []byte(content), 0644); err != nil {
+		// 原子写入：先写临时文件再 rename，避免中断产生损坏的 .strm
+		tmpPath := localPath + ".tmp"
+		if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+			a2s.logger.Errorf("创建.strm文件失败: %v", err)
+			return
+		}
+		if err := os.Rename(tmpPath, localPath); err != nil {
+			os.Remove(tmpPath)
 			a2s.logger.Errorf("创建.strm文件失败: %v", err)
 			return
 		}
@@ -627,8 +649,9 @@ func (a2s *Alist2Strm) getLocalPathFromRemote(remotePath string) string {
 
 	localPath := filepath.Join(a2s.config.TargetDir, relPath)
 
-	if extensions.IsVideoExt(filepath.Ext(localPath)) {
-		localPath = localPath[:len(localPath)-len(filepath.Ext(localPath))] + ".strm"
+	ext := strings.ToLower(filepath.Ext(localPath))
+	if extensions.IsVideoExt(ext) {
+		localPath = localPath[:len(localPath)-len(ext)] + ".strm"
 	}
 
 	return localPath
@@ -646,6 +669,17 @@ func (a2s *Alist2Strm) markSnapshotProcessed(snap *Snapshot) {
 
 // cleanupLocalFiles 清理本地已删除的文件
 func (a2s *Alist2Strm) cleanupLocalFiles(ctx context.Context) error {
+	// 安全守卫：本次扫描没有从远端看到任何文件时，绝不清理本地，
+	// 防止数据源异常（驱动故障、目录改名、权限变化等）导致全量误删
+	a2s.processedMu.RLock()
+	seen := len(a2s.processedPaths)
+	a2s.processedMu.RUnlock()
+	if seen == 0 {
+		err := fmt.Errorf("远端扫描结果为空，为防误删已跳过本地清理，请检查 Alist/OpenList 数据源")
+		a2s.logger.Error(err)
+		return err
+	}
+
 	a2s.logger.Info("开始清理本地文件")
 
 	var allLocalFiles []string

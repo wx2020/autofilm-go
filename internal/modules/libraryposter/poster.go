@@ -6,9 +6,11 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"image/jpeg"
 	"image/png"
 	"os"
+
+	// 注册 JPEG 解码器（image.Decode 依赖 init 副作用）
+	_ "image/jpeg"
 
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
@@ -78,17 +80,6 @@ func composePoster(images [][]byte, cfg LibraryConfig, titleFontPath, subtitleFo
 		return nil, err
 	}
 	return out.Bytes(), nil
-}
-
-func decodeImage(data []byte) (image.Image, error) {
-	img, format, err := image.Decode(bytes.NewReader(data))
-	if err == nil {
-		return img, nil
-	}
-	if format == "jpeg" {
-		return jpeg.Decode(bytes.NewReader(data))
-	}
-	return nil, err
 }
 
 func drawCover(dst *image.RGBA, rect image.Rectangle, src image.Image) {

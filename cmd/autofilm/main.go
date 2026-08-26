@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,15 +22,95 @@ import (
 	"github.com/akimio/autofilm/internal/storage"
 	"github.com/akimio/autofilm/internal/web"
 	"github.com/robfig/cron/v3"
+	"github.com/sirupsen/logrus"
 )
 
 var logger = core.GetLogger()
 
-// 全局 alissync 守护协程列表，用于优雅关闭
-var alistsyncDaemons []*alistsync.RetryDaemon
+// alistsync 守护协程注册表：按配置 ID 去重，并发安全地注册与停止。
+var (
+	daemonsMu   sync.Mutex
+	daemonTable = make(map[string]*alistsync.RetryDaemon)
+)
 
 // 全局数据库存储
 var dbStore *storage.Store
+
+func registerDaemon(configID string, d *alistsync.RetryDaemon) {
+	daemonsMu.Lock()
+	defer daemonsMu.Unlock()
+	daemonTable[configID] = d
+}
+
+func stopAllDaemons() {
+	daemonsMu.Lock()
+	defer daemonsMu.Unlock()
+	for _, d := range daemonTable {
+		d.Stop()
+	}
+}
+
+// cronLogAdapter 将 logrus 适配为 robfig/cron 的日志接口
+type cronLogAdapter struct{ logger *logrus.Logger }
+
+func (a cronLogAdapter) Info(msg string, keysAndValues ...interface{}) {
+	a.logger.Infof("%s %v", msg, keysAndValues)
+}
+
+func (a cronLogAdapter) Error(err error, msg string, keysAndValues ...interface{}) {
+	a.logger.Errorf("%s %v: %v", msg, keysAndValues, err)
+}
+
+func newScheduler() *cron.Cron {
+	return cron.New(
+		cron.WithSeconds(),
+		// 捕获任务 panic，避免单个模块异常导致整个进程退出
+		cron.WithChain(cron.Recover(cronLogAdapter{logger})),
+	)
+}
+
+// safeRun 包装模块执行函数：运行前检查启用状态，统一 recover panic
+func safeRun(moduleType web.ModuleType, configID string, fn func()) func() {
+	return func() {
+		if !web.GetModuleRegistry().IsEnabled(moduleType, configID) {
+			return
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("模块 %s/%s 发生panic: %v\n%s", moduleType, configID, r, debug.Stack())
+			}
+		}()
+		fn()
+	}
+}
+
+// schedulerHolder 并发安全的调度器容器，
+// 主协程与配置重载协程通过它共享 cron 实例，消除变量级数据竞争。
+type schedulerHolder struct {
+	mu        sync.Mutex
+	scheduler *cron.Cron
+}
+
+func (h *schedulerHolder) set(c *cron.Cron) {
+	h.mu.Lock()
+	h.scheduler = c
+	h.mu.Unlock()
+}
+
+func (h *schedulerHolder) current() *cron.Cron {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.scheduler
+}
+
+func (h *schedulerHolder) stopActive() {
+	h.mu.Lock()
+	c := h.scheduler
+	h.mu.Unlock()
+	if c != nil {
+		<-c.Stop().Done()
+	}
+}
 
 func main() {
 	// 打印启动横幅
@@ -124,7 +206,8 @@ func main() {
 	}
 
 	// 创建cron调度器
-	cronScheduler := cron.New(cron.WithSeconds())
+	scheduler := &schedulerHolder{}
+	cronScheduler := newScheduler()
 
 	// 添加Alist2Strm任务
 	if err := addAlist2StrmJobs(cronScheduler); err != nil {
@@ -147,11 +230,12 @@ func main() {
 		logger.Info("LibraryPoster任务添加完成")
 	}
 
-	// 添加AlistSync任务
+	// 添加FileMove任务
 	if err := addFileMoveJobs(cronScheduler); err != nil {
 		logger.Errorf("add FileMove jobs failed: %v", err)
 	}
 
+	// 添加AlistSync任务
 	if err := addAlistSyncJobs(cronScheduler); err != nil {
 		logger.Errorf("添加AlistSync任务失败: %v", err)
 	} else {
@@ -159,6 +243,7 @@ func main() {
 	}
 
 	// 启动调度器
+	scheduler.set(cronScheduler)
 	cronScheduler.Start()
 	logger.Info("AutoFilm启动完成")
 
@@ -169,24 +254,20 @@ func main() {
 			select {
 			case <-reloadCh:
 				logger.Info("检测到配置变更，正在重建定时任务...")
-				// 停止当前调度器
-				stopCtx := cronScheduler.Stop()
-				<-stopCtx.Done()
-
-				// 清空模块注册表
-				reg := web.GetModuleRegistry()
-				reg.Clear()
+				// 停止当前调度器并清空模块注册表
+				scheduler.stopActive()
+				web.GetModuleRegistry().Clear()
 
 				// 重建 cron 调度器
-				cronScheduler = cron.New(cron.WithSeconds())
+				newSched := newScheduler()
+				addAlist2StrmJobs(newSched)
+				addAni2AlistJobs(newSched)
+				addLibraryPosterJobs(newSched)
+				addAlistSyncJobs(newSched)
+				addFileMoveJobs(newSched)
 
-				addAlist2StrmJobs(cronScheduler)
-				addAni2AlistJobs(cronScheduler)
-				addLibraryPosterJobs(cronScheduler)
-				addAlistSyncJobs(cronScheduler)
-				addFileMoveJobs(cronScheduler)
-
-				cronScheduler.Start()
+				scheduler.set(newSched)
+				newSched.Start()
 				logger.Info("定时任务重建完成")
 			case <-ctx.Done():
 				return
@@ -202,13 +283,10 @@ func main() {
 	logger.Info("接收到退出信号，正在关闭...")
 
 	// 停止调度器
-	stopCtx := cronScheduler.Stop()
-	<-stopCtx.Done()
+	scheduler.stopActive()
 
-	// 停止 alissync 守护协程
-	for _, d := range alistsyncDaemons {
-		d.Stop()
-	}
+	// 停止 alistsync 守护协程
+	stopAllDaemons()
 
 	// 关闭 Web 服务
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -277,7 +355,7 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 			Enabled: config.Enable,
 			Cron:    config.Cron,
 		}
-		entry.RunFunc = func() {
+		entry.RunFunc = safeRun(web.ModuleAlist2Strm, config.ID, func() {
 			err := web.TrackRun(string(web.ModuleAlist2Strm), config.ID, func() error {
 				a2s, err := alist2strm.New(config)
 				if err != nil {
@@ -288,7 +366,7 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 			if err != nil {
 				logger.Errorf("Alist2Strm运行失败: %v", err)
 			}
-		}
+		})
 		web.GetModuleRegistry().Register(entry)
 
 		runA2S := entry.RunFunc
@@ -341,7 +419,7 @@ func addAni2AlistJobs(c *cron.Cron) error {
 			Enabled: config.Enable,
 			Cron:    config.Cron,
 		}
-		entry.RunFunc = func() {
+		entry.RunFunc = safeRun(web.ModuleAni2Alist, config.ID, func() {
 			err := web.TrackRun(string(web.ModuleAni2Alist), config.ID, func() error {
 				a2a, err := ani2alist.New(config)
 				if err != nil {
@@ -352,7 +430,7 @@ func addAni2AlistJobs(c *cron.Cron) error {
 			if err != nil {
 				logger.Errorf("Ani2Alist运行失败: %v", err)
 			}
-		}
+		})
 		web.GetModuleRegistry().Register(entry)
 
 		runA2A := entry.RunFunc
@@ -405,7 +483,7 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 			Enabled: config.Enable,
 			Cron:    config.Cron,
 		}
-		entry.RunFunc = func() {
+		entry.RunFunc = safeRun(web.ModuleLibraryPoster, config.ID, func() {
 			err := web.TrackRun(string(web.ModuleLibraryPoster), config.ID, func() error {
 				lp, err := libraryposter.New(config)
 				if err != nil {
@@ -416,7 +494,7 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 			if err != nil {
 				logger.Errorf("LibraryPoster运行失败: %v", err)
 			}
-		}
+		})
 		web.GetModuleRegistry().Register(entry)
 
 		runLP := entry.RunFunc
@@ -469,19 +547,19 @@ func addAlistSyncJobs(c *cron.Cron) error {
 			Enabled: config.Enable,
 			Cron:    config.Cron,
 		}
-		entry.RunFunc = func() {
+		entry.RunFunc = safeRun(web.ModuleAlistSync, config.ID, func() {
 			err := web.TrackRun(string(web.ModuleAlistSync), config.ID, func() error {
 				syncer, err := alistsync.New(config)
 				if err != nil {
 					return err
 				}
-				alistsyncDaemons = append(alistsyncDaemons, syncer.Daemon())
+				registerDaemon(config.ID, syncer.Daemon())
 				return syncer.Run(context.Background())
 			})
 			if err != nil {
 				logger.Errorf("AlistSync运行失败: %v", err)
 			}
-		}
+		})
 		web.GetModuleRegistry().Register(entry)
 
 		runSync := entry.RunFunc
@@ -528,10 +606,7 @@ func addFileMoveJobs(c *cron.Cron) error {
 			Enabled: config.Enable,
 			Cron:    config.Cron,
 		}
-		entry.RunFunc = func() {
-			if !entry.Enabled {
-				return
-			}
+		entry.RunFunc = safeRun(web.ModuleFileMove, config.ID, func() {
 			err := web.TrackRun(string(web.ModuleFileMove), config.ID, func() error {
 				mover, err := filemove.New(config)
 				if err != nil {
@@ -545,7 +620,7 @@ func addFileMoveJobs(c *cron.Cron) error {
 			if err != nil {
 				logger.Errorf("FileMove run failed: %v", err)
 			}
-		}
+		})
 		web.GetModuleRegistry().Register(entry)
 		runFileMove := entry.RunFunc
 		if _, err := c.AddFunc(config.Cron, runFileMove); err != nil {
@@ -579,6 +654,7 @@ func parseFileMoveConfig(m map[string]interface{}) (*filemove.Config, error) {
 		Username:          getString(m, "username"),
 		Password:          getString(m, "password"),
 		Token:             getString(m, "token"),
+		QPSLimit:          getInt(m, "qps_limit"),
 	}
 	if value, ok := m["size"]; ok && value != nil && strings.TrimSpace(getString(m, "size")) != "" {
 		size, err := filemove.ParseSize(value)
@@ -609,6 +685,7 @@ func parseAlistSyncConfig(m map[string]interface{}) (*alistsync.Config, error) {
 		Password:   getString(m, "password"),
 		Token:      getString(m, "token"),
 		WaitTime:   getFloat64(m, "wait_time"),
+		QPSLimit:   getInt(m, "qps_limit"),
 		Cron:       getString(m, "cron"),
 	}
 
@@ -810,10 +887,9 @@ func getInt(m map[string]interface{}, key string) int {
 		case float64:
 			return int(val)
 		case string:
-			// 尝试解析字符串
-			var i int
-			fmt.Sscanf(val, "%d", &i)
-			return i
+			if n, err := strconv.Atoi(strings.TrimSpace(val)); err == nil {
+				return n
+			}
 		}
 	}
 	return 0
@@ -839,9 +915,9 @@ func getInt64(m map[string]interface{}, key string) int64 {
 		case float64:
 			return int64(val)
 		case string:
-			var n int64
-			fmt.Sscanf(val, "%d", &n)
-			return n
+			if n, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64); err == nil {
+				return n
+			}
 		}
 	}
 	return 0
@@ -854,6 +930,10 @@ func getFloat64(m map[string]interface{}, key string) float64 {
 			return val
 		case int:
 			return float64(val)
+		case string:
+			if f, err := strconv.ParseFloat(strings.TrimSpace(val), 64); err == nil {
+				return f
+			}
 		}
 	}
 	return 0

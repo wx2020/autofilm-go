@@ -3,11 +3,48 @@ package filemove
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestNewOpenListAppliesQPSLimit 验证 filemove openlist 后端的 qps_limit 配置真实生效
+func TestNewOpenListAppliesQPSLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			w.Write([]byte(`{"code":200,"message":"ok","data":{"token":"tk"}}`))
+		case "/api/me":
+			w.Write([]byte(`{"code":200,"message":"ok","data":{"base_path":"/","id":1}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	mover, err := New(&Config{
+		ID:        "fm-a",
+		Backend:   "openlist",
+		URL:       srv.URL,
+		Username:  "user",
+		Password:  "pass",
+		SourceDir: "/source",
+		TargetDir: "/target",
+		QPSLimit:  4,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if mover.client == nil {
+		t.Fatal("openlist 后端应创建客户端")
+	}
+	if got := mover.client.LimitQPS(); got != 4 {
+		t.Fatalf("LimitQPS() = %d, want 4", got)
+	}
+}
 
 func TestMoveMatchesRegexAndSizePreservesRelativePath(t *testing.T) {
 	root := t.TempDir()

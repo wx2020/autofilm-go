@@ -21,6 +21,7 @@ const defaults = {
   id: 'file-archive', enable: true, run_on_start: false, backend: 'local', url: 'http://127.0.0.1:5244', username: '', password: '', token: '',
   source_dir: 'D:/downloads', target_dir: 'D:/media', regex: '(?i)\\.(mkv|mp4)$',
   rename_regex: '', rename_replacement: '', remove_matched_dirs: false, size: null, min_size: 0, max_size: 0, flatten: false, overwrite: false,
+  qps_limit: 0,
   cron: '0 0 */1 * * *'
 }
 

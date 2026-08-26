@@ -19,6 +19,8 @@ type RetryDaemon struct {
 	config      *RetryConfig
 	logger      *logrus.Logger
 	stopCh      chan struct{}
+	startOnce   sync.Once
+	stopOnce    sync.Once
 	wg          sync.WaitGroup
 	activeTasks map[string]*SyncTask
 	activeMu    sync.RWMutex
@@ -36,15 +38,19 @@ func NewRetryDaemon(client *alist.AlistClient, queue *QueueManager, config *Retr
 	}
 }
 
-// Start 启动守护协程
+// Start 启动守护协程（幂等：重复调用不会启动第二个轮询循环）
 func (d *RetryDaemon) Start(ctx context.Context) {
-	d.wg.Add(1)
-	go d.loop(ctx)
+	d.startOnce.Do(func() {
+		d.wg.Add(1)
+		go d.loop(ctx)
+	})
 }
 
-// Stop 停止守护协程
+// Stop 停止守护协程（幂等，可安全多次调用）
 func (d *RetryDaemon) Stop() {
-	close(d.stopCh)
+	d.stopOnce.Do(func() {
+		close(d.stopCh)
+	})
 	d.wg.Wait()
 }
 
@@ -100,9 +106,10 @@ func (d *RetryDaemon) loadPendingTasks() {
 		}
 		d.activeTasks[task.ID] = task
 	}
+	restored := len(d.activeTasks)
 	d.activeMu.Unlock()
 
-	d.logger.Infof("已从磁盘恢复 %d 个同步任务", len(d.activeTasks))
+	d.logger.Infof("已从磁盘恢复 %d 个同步任务", restored)
 }
 
 func (d *RetryDaemon) pollTasks(ctx context.Context) {

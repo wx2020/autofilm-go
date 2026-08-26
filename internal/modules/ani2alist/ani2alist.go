@@ -23,34 +23,34 @@ var aniSeasonMonths = []int{1, 4, 7, 10}
 
 // Config Ani2Alist配置
 type Config struct {
-	ID        string
-	Enable    bool // 是否启用此条目，缺省视为启用
+	ID         string
+	Enable     bool // 是否启用此条目，缺省视为启用
 	RunOnStart bool // 启动时立即执行一次，不等 cron，缺省视为不执行
-	URL       string
-	Username  string
-	Password  string
-	Token     string
-	TargetDir string
-	RSSUpdate bool
-	Year      *int
-	Month     *int
-	SrcDomain string
-	RSSDomain string
-	KeyWord   string
-	Cron      string
+	URL        string
+	Username   string
+	Password   string
+	Token      string
+	TargetDir  string
+	RSSUpdate  bool
+	Year       *int
+	Month      *int
+	SrcDomain  string
+	RSSDomain  string
+	KeyWord    string
+	Cron       string
 }
 
 // Ani2Alist ANI转Alist处理器
 type Ani2Alist struct {
-	config     *Config
-	client     *alist.AlistClient
-	logger     *logrus.Logger
-	year       int
-	month      int
-	keyWord    string
-	rssUpdate  bool
-	srcDomain  string
-	rssDomain  string
+	config    *Config
+	client    *alist.AlistClient
+	logger    *logrus.Logger
+	year      int
+	month     int
+	keyWord   string
+	rssUpdate bool
+	srcDomain string
+	rssDomain string
 }
 
 // New 创建新的Ani2Alist实例
@@ -119,7 +119,9 @@ func (a2a *Ani2Alist) Run(ctx context.Context) error {
 		return fmt.Errorf("解析存储器配置失败: %w", err)
 	}
 
-	urlDict := a2a.structure2Dict(additionDict["url_structure"].(string))
+	// 新建存储的 Addition 可能为空，必须使用安全断言避免 panic
+	urlStructure, _ := additionDict["url_structure"].(string)
+	urlDict := a2a.structure2Dict(urlStructure)
 
 	// 更新URL字典
 	if err := a2a.updateURLDicts(ctx, urlDict); err != nil {
@@ -240,9 +242,9 @@ func (a2a *Ani2Alist) updateDataRecursive(ctx context.Context, url string, urlDi
 
 	var result struct {
 		Files []struct {
-			Name     string `json:"name"`
-			MimeType string `json:"mimeType"`
-			Size     string `json:"size"`
+			Name        string `json:"name"`
+			MimeType    string `json:"mimeType"`
+			Size        string `json:"size"`
 			CreatedTime string `json:"createdTime"`
 		} `json:"files"`
 	}
@@ -509,7 +511,7 @@ func (a2a *Ani2Alist) structure2Dict(text string) map[string]interface{} {
 }
 
 type parseResult struct {
-	result map[string]interface{}
+	result    map[string]interface{}
 	nextIndex int
 }
 

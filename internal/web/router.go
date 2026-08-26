@@ -4,7 +4,9 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/akimio/autofilm/internal/core"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -21,14 +23,19 @@ type WebConfig struct {
 func (s *Server) newRouter() http.Handler {
 	r := chi.NewRouter()
 
-	// 中间件
-	r.Use(middleware.Logger)
+	// 中间件（requestLogger 不记录 query，避免 token/密码进入日志）
+	r.Use(requestLogger)
 	r.Use(middleware.Recoverer)
 	r.Get("/api/health", s.handleHealth)
-	r.Get("/metrics", handlePrometheusMetrics)
 	r.Get("/api/auth/status", s.handleAuthStatus)
 	r.Post("/api/auth/bootstrap", s.handleBootstrap)
 	r.Post("/api/auth/login", s.handleLogin)
+
+	// Prometheus 指标端点：与业务 API 一致需要鉴权
+	r.Group(func(r chi.Router) {
+		r.Use(s.tokenAuth)
+		r.Get("/metrics", handlePrometheusMetrics)
+	})
 
 	// API 路由
 	r.Route("/api", func(r chi.Router) {
@@ -36,7 +43,6 @@ func (s *Server) newRouter() http.Handler {
 		r.Get("/auth/me", s.handleMe)
 		r.Post("/auth/logout", s.handleLogout)
 		r.Get("/metrics", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, metricsSnapshot()) })
-		r.Get("/alist/test", s.handleAlistTest)
 		r.Post("/alist/test", s.handleAlistTest)
 		r.Get("/modules", s.handleListModules)
 		r.Get("/sync/queue", s.handleGetSyncQueue)
@@ -72,6 +78,30 @@ func (s *Server) newRouter() http.Handler {
 	r.NotFound(spaHandler())
 
 	return r
+}
+
+// captureResponseWriter 记录响应状态码
+type captureResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *captureResponseWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// requestLogger 轻量访问日志：只记录 method/path/status/耗时，
+// 不记录 query string（可能包含 token 或密码等敏感信息）。
+func requestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		cw := &captureResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(cw, r)
+		if logger := core.GetLogger(); logger != nil {
+			logger.Debugf("%s %s -> %d (%s)", r.Method, r.URL.Path, cw.status, time.Since(start))
+		}
+	})
 }
 
 func spaHandler() http.HandlerFunc {

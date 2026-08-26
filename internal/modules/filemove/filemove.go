@@ -42,6 +42,7 @@ type Config struct {
 	Username          string
 	Password          string
 	Token             string
+	QPSLimit          int // OpenList API 限流（次/秒），0 表示不限流；仅 openlist 后端生效
 }
 
 // ParseSize parses a byte size such as 1073741824, 50KB, 500MB or 1GB.
@@ -205,6 +206,8 @@ func New(cfg *Config) (*FileMover, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create OpenList client: %w", err)
 		}
+		// 声明本任务的限流策略（0 表示不限流），共享客户端时后启动者生效
+		client.SetRateLimit(cfg.QPSLimit)
 		mover.client = client
 	}
 	return mover, nil
@@ -377,11 +380,14 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			destinationRel = pathBase(rel)
 		}
 		destination := joinRemotePath(targetDir, destinationRel)
-		var existingExists bool
 		if existing, err := m.client.FSGet(ctx, destination); err == nil && existing != nil {
-			existingExists = true
 			if !m.config.Overwrite {
 				report.Skipped++
+				continue
+			}
+			// overwrite 时先删除旧目标，避免 fs/move 撞名被服务端自动改名后误删对象
+			if err := m.client.FSRemove(ctx, pathDir(destination), []string{pathBase(destination)}); err != nil {
+				report.Errors = append(report.Errors, fmt.Errorf("remove existing destination %s: %w", destination, err))
 				continue
 			}
 		}
@@ -392,11 +398,6 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 		if err := m.client.FSMove(ctx, pathDir(file.FullPath), pathDir(destination), []string{pathBase(file.FullPath)}); err != nil {
 			report.Errors = append(report.Errors, fmt.Errorf("move %s to %s: %w", file.FullPath, destination, err))
 			continue
-		}
-		if existingExists {
-			if err := m.client.FSRemove(ctx, pathDir(destination), []string{pathBase(destination)}); err != nil {
-				report.Errors = append(report.Errors, fmt.Errorf("remove existing file after move %s: %w", destination, err))
-			}
 		}
 		report.Moved++
 		movedDirs[pathDir(file.FullPath)]++

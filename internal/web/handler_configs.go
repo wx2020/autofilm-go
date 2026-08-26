@@ -105,6 +105,14 @@ func validateModuleConfig(typ string, cfg map[string]interface{}) error {
 	if typ == "ani2alist" {
 		return pathRequired("target_dir")
 	}
+	if typ == "alistsync" || typ == "filemove" {
+		// qps_limit 必须是非负整数，0 表示不限流
+		if value, exists := cfg["qps_limit"]; exists && value != nil && strings.TrimSpace(fmt.Sprint(value)) != "" {
+			if parseConfigInt64(value) < 0 {
+				return fmt.Errorf("qps_limit 不能为负数")
+			}
+		}
+	}
 	if typ == "filemove" {
 		backendValue, backendSet := cfg["backend"]
 		backend := strings.ToLower(strings.TrimSpace(fmt.Sprint(backendValue)))

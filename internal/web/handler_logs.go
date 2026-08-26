@@ -1,10 +1,11 @@
 package web
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -16,7 +17,15 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		// 非浏览器客户端（无 Origin）放行；跨源请求仅允许同源
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		u, err := url.Parse(origin)
+		return err == nil && u.Host == r.Host
+	},
 }
 
 // handleGetLogs GET /api/logs?lines=500&level=warn
@@ -137,7 +146,7 @@ func (h *LogHook) Levels() []logrus.Level {
 	return logrus.AllLevels
 }
 
-// tailLogFile 读取文件末尾 n 行
+// tailLogFile 读取文件末尾 n 行（从文件尾部按窗口反向读取，避免大文件全量载入内存）
 func tailLogFile(filePath string, n int) ([]string, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -145,15 +154,27 @@ func tailLogFile(filePath string, n int) ([]string, error) {
 	}
 	defer f.Close()
 
-	var lines []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-	if err := scanner.Err(); err != nil {
+	info, err := f.Stat()
+	if err != nil {
 		return nil, err
 	}
 
+	window := int64(n)*1024 + 4096
+	if window > info.Size() {
+		window = info.Size()
+	}
+	start := info.Size() - window
+
+	data := make([]byte, window)
+	if _, err := f.ReadAt(data, start); err != nil && err != io.EOF {
+		return nil, err
+	}
+
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	// 窗口起点落在行中间时，首行是截断的半行，丢弃
+	if start > 0 && len(lines) > 0 {
+		lines = lines[1:]
+	}
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}

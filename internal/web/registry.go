@@ -31,6 +31,8 @@ type ModuleEntry struct {
 }
 
 // ModuleRegistry 模块注册表
+// 并发约定：所有对 entry 字段的读取都通过返回副本完成，
+// 写操作（Register/SetEnabled）持写锁，避免读写竞争。
 type ModuleRegistry struct {
 	mu      sync.RWMutex
 	entries map[string]*ModuleEntry
@@ -49,12 +51,25 @@ func (r *ModuleRegistry) key(typ ModuleType, id string) string {
 	return string(typ) + ":" + id
 }
 
+// computeNextRun 纯函数：根据 cron 计算下次运行时间（不修改 entry）
+func (r *ModuleRegistry) computeNextRun(cronSpec string, enabled bool) time.Time {
+	if cronSpec == "" || !enabled {
+		return time.Time{}
+	}
+	schedule, err := r.parser.Parse(cronSpec)
+	if err != nil {
+		return time.Time{}
+	}
+	return schedule.Next(time.Now())
+}
+
 // Register 注册模块
 func (r *ModuleRegistry) Register(entry *ModuleEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.entries[r.key(entry.Type, entry.ID)] = entry
-	entry.updateNextRun(r)
+	stored := *entry
+	stored.NextRun = r.computeNextRun(entry.Cron, entry.Enabled)
+	r.entries[r.key(entry.Type, entry.ID)] = &stored
 }
 
 // Unregister 注销模块
@@ -64,36 +79,65 @@ func (r *ModuleRegistry) Unregister(typ ModuleType, id string) {
 	delete(r.entries, r.key(typ, id))
 }
 
-// Get 获取模块
+// Get 获取模块副本（返回副本以避免外部修改共享状态）
 func (r *ModuleRegistry) Get(typ ModuleType, id string) *ModuleEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.entries[r.key(typ, id)]
+	entry, ok := r.entries[r.key(typ, id)]
+	if !ok {
+		return nil
+	}
+	e := *entry
+	return &e
 }
 
-// List 列出所有模块
-func (r *ModuleRegistry) List() []*ModuleEntry {
+// IsEnabled 判断模块当前是否启用
+func (r *ModuleRegistry) IsEnabled(typ ModuleType, id string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	entry, ok := r.entries[r.key(typ, id)]
+	if !ok {
+		return false
+	}
+	return entry.Enabled
+}
+
+// SetEnabled 更新模块启用状态（加锁写入），返回是否存在该模块
+func (r *ModuleRegistry) SetEnabled(typ ModuleType, id string, enabled bool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.entries[r.key(typ, id)]
+	if !ok {
+		return false
+	}
+	entry.Enabled = enabled
+	entry.NextRun = r.computeNextRun(entry.Cron, enabled)
+	return true
+}
+
+// List 列出所有模块（返回副本）
+func (r *ModuleRegistry) List() []*ModuleEntry {
+	r.mu.RLock()
 	result := make([]*ModuleEntry, 0, len(r.entries))
 	for _, entry := range r.entries {
-		entry.updateNextRun(r)
-		result = append(result, entry)
+		e := *entry
+		result = append(result, &e)
 	}
+	r.mu.RUnlock()
 	return result
 }
 
-// ListByType 按类型列出模块
+// ListByType 按类型列出模块（返回副本）
 func (r *ModuleRegistry) ListByType(typ ModuleType) []*ModuleEntry {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	var result []*ModuleEntry
 	for _, entry := range r.entries {
 		if entry.Type == typ {
-			entry.updateNextRun(r)
-			result = append(result, entry)
+			e := *entry
+			result = append(result, &e)
 		}
 	}
+	r.mu.RUnlock()
 	return result
 }
 
@@ -102,19 +146,6 @@ func (r *ModuleRegistry) Clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.entries = make(map[string]*ModuleEntry)
-}
-
-func (e *ModuleEntry) updateNextRun(r *ModuleRegistry) {
-	if e.Cron == "" || !e.Enabled {
-		e.NextRun = time.Time{}
-		return
-	}
-	schedule, err := r.parser.Parse(e.Cron)
-	if err != nil {
-		e.NextRun = time.Time{}
-		return
-	}
-	e.NextRun = schedule.Next(time.Now())
 }
 
 var globalRegistry *ModuleRegistry

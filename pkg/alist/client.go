@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/akimio/autofilm/internal/core"
@@ -33,8 +35,10 @@ type AlistClient struct {
 	httpClient  *httpclient.HTTPClient
 	logger      *logrus.Logger
 	tokenMu     sync.RWMutex
+	loginMu     sync.Mutex  // 序列化令牌刷新，避免并发重复登录
+	refreshing  atomic.Bool // 登录请求进行中：嵌套的 getToken 直接返回当前令牌
 	tokenExp    int64
-	rateLimiter *rate.Limiter
+	rateLimiter atomic.Pointer[rate.Limiter] // QPS 限流器；原子访问：多个任务可能共享客户端并各自设置限流
 }
 
 // AlistPath Alist文件路径信息
@@ -56,11 +60,11 @@ func (p *AlistPath) IsDir() bool {
 	return p.Type == 1
 }
 
-// Suffix 获取文件后缀
+// Suffix 获取文件后缀（统一小写，保证大写扩展名也能匹配扩展名表）
 func (p *AlistPath) Suffix() string {
 	for i := len(p.Name) - 1; i >= 0; i-- {
 		if p.Name[i] == '.' {
-			return p.Name[i:]
+			return strings.ToLower(p.Name[i:])
 		}
 	}
 	return ""
@@ -132,14 +136,9 @@ type FSListResponse struct {
 }
 
 // GetClient 获取Alist客户端（支持多实例）
+// 缓存键包含凭据摘要，避免同地址不同密码时复用错误客户端
 func GetClient(url, username, password, token string) (*AlistClient, error) {
-	// 确保url有协议前缀
-	if url != "" && !startsWith(url, "http://") && !startsWith(url, "https://") {
-		url = "https://" + url
-	}
-	url = trimRight(url, "/")
-
-	key := url + ":" + username
+	url, key := clientCacheKey(url, username, password, token)
 
 	// 快速路径：已有客户端直接返回（读锁）
 	clientsMu.RLock()
@@ -167,6 +166,27 @@ func GetClient(url, username, password, token string) (*AlistClient, error) {
 	return client, nil
 }
 
+// NewStandalone 创建不进入全局缓存的临时客户端，用于连接测试等一次性场景，
+// 避免测试凭据污染正式任务的客户端缓存。
+func NewStandalone(url, username, password, token string) (*AlistClient, error) {
+	url = normalizeBaseURL(url)
+	return newAlistClient(url, username, password, token)
+}
+
+func normalizeBaseURL(url string) string {
+	if url != "" && !startsWith(url, "http://") && !startsWith(url, "https://") {
+		url = "https://" + url
+	}
+	return trimRight(url, "/")
+}
+
+func clientCacheKey(rawURL, username, password, token string) (string, string) {
+	url := normalizeBaseURL(rawURL)
+	sum := sha256.Sum256([]byte(password + "\x00" + token))
+	digest := base64.RawStdEncoding.EncodeToString(sum[:8])
+	return url, url + "|" + username + "|" + digest
+}
+
 func newAlistClient(url, username, password, token string) (*AlistClient, error) {
 	if (username == "" || password == "") && token == "" {
 		return nil, fmt.Errorf("用户名及密码为空或令牌Token为空")
@@ -181,6 +201,11 @@ func newAlistClient(url, username, password, token string) (*AlistClient, error)
 		logger:     core.GetLogger(),
 	}
 
+	// core 日志未初始化时（如独立使用本包）回退到标准 logrus，避免 nil 指针
+	if client.logger == nil {
+		client.logger = logrus.StandardLogger()
+	}
+
 	if token != "" {
 		client.tokenExp = -1 // 永不过期
 	}
@@ -193,42 +218,51 @@ func newAlistClient(url, username, password, token string) (*AlistClient, error)
 	return client, nil
 }
 
+// getToken 获取当前可用的 Authorization 令牌
+// 刷新令牌时绝不持有任何锁调用 authLogin：
+//   - 不持有 tokenMu 写锁，避免同 goroutine 内再次 RLock 自锁；
+//   - authLogin 自身的请求也会经过 getToken（makeHeaders），
+//     此时 refreshing 标记使嵌套调用直接返回当前令牌而不再尝试刷新。
 func (c *AlistClient) getToken() string {
 	c.tokenMu.RLock()
-	defer c.tokenMu.RUnlock()
+	tok := c.token
+	exp := c.tokenExp
+	c.tokenMu.RUnlock()
 
-	if c.tokenExp == -1 {
-		c.logger.Debug("使用永久令牌")
-		return c.token
+	if exp == -1 || exp >= time.Now().Unix() || c.refreshing.Load() {
+		return tok
 	}
 
-	c.logger.Debug("使用临时令牌")
-	now := time.Now().Unix()
+	// 序列化刷新动作，避免过期瞬间并发重复登录
+	c.loginMu.Lock()
+	defer c.loginMu.Unlock()
 
-	if c.tokenExp < now {
-		// 令牌过期，需要重新获取
-		c.tokenMu.RUnlock()
-		c.tokenMu.Lock()
-
-		// 双重检查
-		if c.tokenExp < now {
-			c.logger.Debug("令牌已过期，重新获取")
-			newToken, err := c.authLogin(context.Background())
-			if err != nil {
-				c.tokenMu.Unlock()
-				c.logger.Errorf("重新获取令牌失败: %v", err)
-				return ""
-			}
-			c.token = newToken
-			// 令牌有效期2天，提前5分钟刷新
-			c.tokenExp = now + 2*24*60*60 - 5*60
-		}
-
-		c.tokenMu.Unlock()
-		c.tokenMu.RLock()
+	// 双重检查：可能已被其他协程刷新
+	c.tokenMu.RLock()
+	tok = c.token
+	exp = c.tokenExp
+	c.tokenMu.RUnlock()
+	if exp == -1 || exp >= time.Now().Unix() {
+		return tok
 	}
 
-	return c.token
+	c.refreshing.Store(true)
+	newToken, err := c.authLogin(context.Background())
+	c.refreshing.Store(false)
+
+	if err != nil {
+		c.logger.Errorf("重新获取令牌失败: %v", err)
+		return ""
+	}
+
+	c.tokenMu.Lock()
+	c.token = newToken
+	// 令牌有效期2天，提前5分钟刷新
+	c.tokenExp = time.Now().Unix() + 2*24*60*60 - 5*60
+	c.tokenMu.Unlock()
+
+	c.logger.Debugf("%s 更新令牌成功", c.username)
+	return newToken
 }
 
 func (c *AlistClient) makeHeaders() map[string]string {
@@ -238,18 +272,30 @@ func (c *AlistClient) makeHeaders() map[string]string {
 	}
 }
 
-// SetRateLimit 设置 QPS 限流
+// LimitQPS 返回当前生效的 QPS 限流值（次/秒），未设置限流时返回 0。
+// 供诊断、测试与共享客户端场景下确认限流策略。
+func (c *AlistClient) LimitQPS() int {
+	if lim := c.rateLimiter.Load(); lim != nil {
+		return int(lim.Limit())
+	}
+	return 0
+}
+
+// SetRateLimit 设置 QPS 限流（qps<=0 取消限流）
+// 注意：通过 GetClient 缓存共享同一客户端的所有任务共用这一个限流器，
+// 后设置的值对全部在途/后续请求生效。
 func (c *AlistClient) SetRateLimit(qps int) {
 	if qps <= 0 {
-		c.rateLimiter = nil
+		c.rateLimiter.Store(nil)
 		return
 	}
-	c.rateLimiter = rate.NewLimiter(rate.Limit(qps), qps)
+	c.rateLimiter.Store(rate.NewLimiter(rate.Limit(qps), qps))
 }
 
 func (c *AlistClient) doRequest(ctx context.Context, method, endpoint string, jsonData []byte) (*APIResponse, error) {
-	if c.rateLimiter != nil {
-		if err := c.rateLimiter.Wait(ctx); err != nil {
+	// 原子读取一次，避免读取过程中被其他协程替换导致不一致
+	if lim := c.rateLimiter.Load(); lim != nil {
+		if err := lim.Wait(ctx); err != nil {
 			return nil, fmt.Errorf("限流等待失败: %w", err)
 		}
 	}
@@ -342,61 +388,9 @@ func (c *AlistClient) syncMe(ctx context.Context) error {
 	return nil
 }
 
-// FSList 获取文件列表
+// FSList 获取文件列表（轻量，不逐文件发起 fs/get 请求）
 func (c *AlistClient) FSList(ctx context.Context, dirPath string) ([]AlistPath, error) {
-	type ListRequest struct {
-		Path     string `json:"path"`
-		Password string `json:"password"`
-		Page     int    `json:"page"`
-		PerPage  int    `json:"per_page"`
-		Refresh  bool   `json:"refresh"`
-	}
-
-	req := ListRequest{
-		Path:     dirPath,
-		Password: "",
-		Page:     1,
-		PerPage:  0, // 0 表示不分页，返回所有
-		Refresh:  false,
-	}
-
-	jsonData, _ := json.Marshal(req)
-	resp, err := c.doRequest(ctx, "POST", "/api/fs/list", jsonData)
-	if err != nil {
-		return nil, err
-	}
-
-	var result FSListResponse
-	if err := json.Unmarshal(resp.Data, &result); err != nil {
-		return nil, err
-	}
-
-	// 填充完整路径和下载链接
-	for i := range result.Content {
-		result.Content[i].ServerURL = c.url
-		result.Content[i].BasePath = c.basePath
-		result.Content[i].FullPath = dirPath + "/" + result.Content[i].Name
-
-		// 获取文件的下载链接
-		if !result.Content[i].IsDir() {
-			fullPath := result.Content[i].FullPath
-			c.logger.Debugf("[DEBUG] 正在获取文件下载链接: %s", fullPath)
-			if fileDetail, err := c.FSGet(ctx, fullPath); err == nil && fileDetail != nil {
-				result.Content[i].RawURL = fileDetail.RawURL
-				// 回填签名，list 接口在部分场景下不会下发 sign，以 FSGet 返回为准
-				if fileDetail.Sign != "" {
-					result.Content[i].Sign = fileDetail.Sign
-				}
-				c.logger.Debugf("[DEBUG] 文件: %s", result.Content[i].Name)
-				c.logger.Debugf("[DEBUG]   RawURL: %s", maskURL(result.Content[i].RawURL))
-				c.logger.Debugf("[DEBUG]   Sign: %s", maskURL(result.Content[i].Sign))
-			} else {
-				c.logger.Warnf("[WARN] 获取文件下载链接失败: %s, 错误: %v", fullPath, err)
-			}
-		}
-	}
-
-	return result.Content, nil
+	return c.FSListLight(ctx, dirPath)
 }
 
 // FSListLight 获取文件列表（轻量版，不发起 fs/get 请求）
@@ -680,7 +674,11 @@ func (c *AlistClient) iterPathRecursive(ctx context.Context, dirPath string, wai
 	}
 
 	if waitTime > 0 {
-		time.Sleep(waitTime)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(waitTime):
+		}
 	}
 
 	for _, path := range paths {
@@ -689,19 +687,25 @@ func (c *AlistClient) iterPathRecursive(ctx context.Context, dirPath string, wai
 			if err := c.iterPathRecursive(ctx, path.FullPath, waitTime, isDetail, filterFunc, outCh); err != nil {
 				return err
 			}
-		} else if filterFunc != nil && filterFunc(&path) {
-			// 应用过滤器
-			var resultPath *AlistPath
-			if isDetail {
-				resultPath, err = c.FSGet(ctx, path.FullPath)
-				if err != nil {
-					c.logger.Warnf("获取文件详细信息失败 %s: %v", path.FullPath, err)
-					continue
-				}
+			continue
+		}
+		if filterFunc == nil || !filterFunc(&path) {
+			continue
+		}
+		// 过滤后的文件才按需补全详情：显式要求详情，或列表接口未返回签名/直链时
+		resultPath := &path
+		if isDetail || (path.RawURL == "" && path.Sign == "") {
+			detail, err := c.FSGet(ctx, path.FullPath)
+			if err != nil {
+				c.logger.Warnf("获取文件详细信息失败 %s: %v（使用目录列表数据继续）", path.FullPath, err)
 			} else {
-				resultPath = &path
+				resultPath = detail
 			}
-			outCh <- resultPath
+		}
+		select {
+		case outCh <- resultPath:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 

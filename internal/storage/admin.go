@@ -40,6 +40,18 @@ func validRole(role string) bool {
 	return role == "admin" || role == "operator" || role == "viewer"
 }
 
+// backupModuleTypes 备份/恢复覆盖的模块类型（必须与 Web 端支持的模块一致）
+var backupModuleTypes = []string{"alist2strm", "ani2alist", "libraryposter", "alistsync", "filemove"}
+
+func isBackupModuleType(typ string) bool {
+	for _, t := range backupModuleTypes {
+		if t == typ {
+			return true
+		}
+	}
+	return false
+}
+
 func HashPassword(password string) (string, error) {
 	if len(password) < 8 {
 		return "", fmt.Errorf("密码至少需要 8 个字符")
@@ -125,6 +137,40 @@ func (s *Store) CreateUser(username, password, role string) (*User, error) {
 	}
 	id, _ := res.LastInsertId()
 	return &User{ID: id, Username: username, Role: role, Enabled: true, CreatedAt: time.Now()}, nil
+}
+
+// BootstrapFirstUser 事务内创建首个管理员：仅当 users 表为空时成功，
+// 消除并发 bootstrap 时创建多个管理员的竞态。
+func (s *Store) BootstrapFirstUser(username, password string) (*User, error) {
+	hash, err := HashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var count int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+		return nil, err
+	}
+	if count != 0 {
+		return nil, fmt.Errorf("系统已经初始化")
+	}
+	if username == "" {
+		return nil, fmt.Errorf("用户名或角色无效")
+	}
+	res, err := tx.Exec("INSERT INTO users(username,password_hash,role) VALUES(?,?,'admin')", username, hash)
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &User{ID: id, Username: username, Role: "admin", Enabled: true, CreatedAt: time.Now()}, nil
 }
 
 func (s *Store) ListUsers() ([]User, error) {
@@ -252,7 +298,7 @@ func (s *Store) ExportBackup() (*Backup, error) {
 		return nil, err
 	}
 	b := &Backup{Version: 1, CreatedAt: time.Now(), Settings: settings, ModuleConfigs: map[string][]map[string]interface{}{}}
-	for _, typ := range []string{"alist2strm", "ani2alist", "libraryposter", "alistsync"} {
+	for _, typ := range backupModuleTypes {
 		list, err := s.ListModuleConfigs(typ)
 		if err != nil {
 			return nil, err
@@ -279,7 +325,7 @@ func (s *Store) ImportBackup(b *Backup) error {
 		if typ == "alissync" {
 			typ = "alistsync"
 		}
-		if typ != "alist2strm" && typ != "ani2alist" && typ != "libraryposter" && typ != "alistsync" {
+		if !isBackupModuleType(typ) {
 			continue
 		}
 		for _, cfg := range configs {
@@ -307,7 +353,7 @@ func (s *Store) ImportBackup(b *Backup) error {
 	}
 
 	// 按类型删除旧配置（只删除我们支持的类型）
-	for _, typ := range []string{"alist2strm", "ani2alist", "libraryposter", "alistsync"} {
+	for _, typ := range backupModuleTypes {
 		if _, err = tx.Exec("DELETE FROM module_configs WHERE module_type=?", typ); err != nil {
 			return err
 		}

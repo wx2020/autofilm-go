@@ -26,8 +26,10 @@ func TestMissingAPIIsNotSPA(t *testing.T) {
 	handler := NewServer(&WebConfig{Enabled: true, Host: "127.0.0.1", Port: 8080}).httpServer.Handler
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/not-found", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rec.Code)
+	// 未认证请求在进入路由前被 401 拦截；认证后的未知接口仍为 404。
+	// 两者都不应返回 SPA 入口页。
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 404 or 401", rec.Code)
 	}
 	if strings.Contains(rec.Body.String(), `<div id="app"></div>`) {
 		t.Fatal("missing API returned the SPA entry point")

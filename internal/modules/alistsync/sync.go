@@ -133,7 +133,11 @@ func (as *Alissync) listRecursiveInner(ctx context.Context, dirPath string, wait
 	}
 
 	if waitTime > 0 {
-		time.Sleep(waitTime)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(waitTime):
+		}
 	}
 
 	for _, path := range paths {
@@ -149,12 +153,17 @@ func (as *Alissync) listRecursiveInner(ctx context.Context, dirPath string, wait
 	return nil
 }
 
-// replacePrefix 替换路径前缀
+// replacePrefix 替换路径前缀（按路径段匹配，避免 /movies 误命中 /movies2）
 func replacePrefix(path, oldPrefix, newPrefix string) string {
-	if !strings.HasPrefix(path, oldPrefix) {
-		return path
+	dst := strings.TrimSuffix(newPrefix, "/")
+	if oldPrefix == "/" || strings.TrimSuffix(oldPrefix, "/") == "" {
+		return dst + path
 	}
-	return newPrefix + path[len(oldPrefix):]
+	op := strings.TrimSuffix(oldPrefix, "/")
+	if path == op || strings.HasPrefix(path, op+"/") {
+		return dst + path[len(op):]
+	}
+	return path
 }
 
 // collectDirs 收集所有需要创建的目标目录

@@ -16,30 +16,29 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAlistTest GET /api/alist/test
-// 测试 Alist 连通性：创建临时客户端并调用 /api/me
+// handleAlistTest POST /api/alist/test
+// 测试 Alist 连通性：创建临时客户端（不进入全局缓存）并调用 /api/me。
+// 仅接受 POST JSON，避免凭据出现在 URL query 中被记录。
 func (s *Server) handleAlistTest(w http.ResponseWriter, r *http.Request) {
-	url := r.URL.Query().Get("url")
-	username := r.URL.Query().Get("username")
-	password := r.URL.Query().Get("password")
-	token := r.URL.Query().Get("token")
-	if r.Method == http.MethodPost {
-		var body struct {
-			URL, Username, Password, Token string
-		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
-			writeJSONError(w, http.StatusBadRequest, "请求格式无效")
-			return
-		}
-		url, username, password, token = body.URL, body.Username, body.Password, body.Token
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "请使用 POST 请求")
+		return
 	}
+	var body struct {
+		URL, Username, Password, Token string
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "请求格式无效")
+		return
+	}
+	url := body.URL
 
 	if url == "" {
 		http.Error(w, `{"error":"缺少 url 参数"}`, http.StatusBadRequest)
 		return
 	}
 
-	client, err := alist.GetClient(url, username, password, token)
+	client, err := alist.NewStandalone(url, body.Username, body.Password, body.Token)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]interface{}{
 			"success": false,

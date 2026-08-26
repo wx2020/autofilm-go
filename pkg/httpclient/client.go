@@ -20,12 +20,12 @@ var (
 
 // HTTPClient HTTP客户端
 type HTTPClient struct {
-	client      *http.Client
-	timeout     time.Duration
-	userAgent   string
-	logger      *logrus.Logger
-	maxRetries  int
-	retryDelay  time.Duration
+	client     *http.Client
+	timeout    time.Duration
+	userAgent  string
+	logger     *logrus.Logger
+	maxRetries int
+	retryDelay time.Duration
 }
 
 // Config HTTP客户端配置
@@ -107,9 +107,16 @@ func (c *HTTPClient) Request(ctx context.Context, method, url string, headers ma
 	var lastErr error
 
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if attempt > 0 {
 			c.logger.Debugf("重试请求 %s %s (第 %d/%d 次)", method, url, attempt, c.maxRetries)
-			time.Sleep(c.retryDelay * time.Duration(attempt))
+			select {
+			case <-time.After(c.retryDelay * time.Duration(attempt)):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 
 		req, err := http.NewRequestWithContext(ctx, method, url, body)
@@ -182,15 +189,23 @@ func (c *HTTPClient) Head(ctx context.Context, url string, headers map[string]st
 	return c.Request(ctx, http.MethodHead, url, headers, nil)
 }
 
-// Download 下载文件到指定路径
+// Download 下载文件到指定路径。
+// 先写入 .part 临时文件，成功后原子 rename 到目标路径，
+// 失败或中断不会在目标路径留下半截文件。
 func (c *HTTPClient) Download(ctx context.Context, url, filePath string, headers map[string]string) error {
 	var lastErr error
-	var out *os.File
 
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if attempt > 0 {
 			c.logger.Debugf("重试下载 %s (第 %d/%d 次)", url, attempt, c.maxRetries)
-			time.Sleep(c.retryDelay * time.Duration(attempt))
+			select {
+			case <-time.After(c.retryDelay * time.Duration(attempt)):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -215,26 +230,30 @@ func (c *HTTPClient) Download(ctx context.Context, url, filePath string, headers
 			continue
 		}
 
-		// 如果上次迭代创建了文件，先关闭它
-		if out != nil {
-			out.Close()
-		}
-
-		// 创建文件
-		out, err = os.Create(filePath)
+		partPath := filePath + ".part"
+		out, err := os.Create(partPath)
 		if err != nil {
 			resp.Body.Close()
 			return fmt.Errorf("创建文件失败: %w", err)
 		}
 
-		// 写入文件
 		_, err = io.Copy(out, resp.Body)
 		resp.Body.Close()
 		if err != nil {
 			out.Close()
-			out = nil
+			os.Remove(partPath)
 			lastErr = err
 			continue
+		}
+		if err := out.Close(); err != nil {
+			os.Remove(partPath)
+			lastErr = err
+			continue
+		}
+
+		if err := os.Rename(partPath, filePath); err != nil {
+			os.Remove(partPath)
+			return fmt.Errorf("写入文件失败: %w", err)
 		}
 
 		c.logger.Debugf("文件下载成功: %s", filePath)
