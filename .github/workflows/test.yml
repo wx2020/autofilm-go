@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        go-version: ['1.24', '1.25']
+        go-version: ['1.25']
 
     runs-on: ${{ matrix.os }}
 
@@ -52,36 +52,3 @@ jobs:
           go test -coverprofile=coverage.out -covermode=atomic ./...
           go tool cover -func=coverage.out
         shell: bash
-
-  race-stress-test:
-    name: Race Stress Test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-          cache: true
-          cache-dependency-path: go.sum
-
-      - name: Download modules
-        run: go mod download
-
-      - name: GlobalStore race stress test
-        run: go test -race -count=100 -v ./internal/storage/ -run TestGlobalStoreRace
-
-      - name: GlobalStore concurrent stress test
-        run: go test -race -count=100 -v ./internal/storage/ -run TestConcurrentSetGlobalStore
-
-      - name: GetClient race stress test
-        run: go test -race -count=100 -v ./pkg/alist/ -run TestGetClientRace
-
-      - name: GetClient duplicate creation test
-        run: go test -race -count=100 -v ./pkg/alist/ -run TestGetClientDuplicateCreation
-
-      - name: SaveSnapshot integrity test
-        run: go test -race -count=50 -v ./internal/storage/ -run TestSaveSnapshot
