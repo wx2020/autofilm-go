@@ -76,7 +76,14 @@ func (s *Server) handleRunModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 同一任务同时只允许跑一个：抢占执行权失败说明上次运行尚未结束
+	if !GetModuleRegistry().TryAcquireRun(typ, id) {
+		writeJSONError(w, http.StatusConflict, "任务正在运行中，请稍后再试")
+		return
+	}
+
 	go func() {
+		defer GetModuleRegistry().ReleaseRun(typ, id)
 		// RunFunc 内部会处理错误日志
 		entry.RunFunc()
 	}()

@@ -50,9 +50,11 @@
 import { ref, onMounted } from 'vue'
 import ModuleCard from '../components/ModuleCard.vue'
 import ModuleConfigEditor from '../components/ModuleConfigEditor.vue'
+import { useRunningPoll } from '../useRunningPoll.js'
 
 const tasks = ref([])
 const syncModules = ref([])
+const { schedulePoll } = useRunningPoll(load, syncModules)
 const defaults = { id: 'cloud-sync', enable: true, run_on_start: false, url: 'http://127.0.0.1:5244', username: '', password: '', token: '', pairs: [{ src: '/source', dst: '/target', delete_src: false, overwrite: 'if_newer' }], retry: { max_attempts: 10, backoff: 'expo', jitter: 0.2 }, qps_limit: 0, cron: '0 0 */2 * * *' }
 
 function stateBadge(state) {
@@ -82,6 +84,7 @@ async function load() {
     syncModules.value = []
     console.error(e)
   }
+  schedulePoll()
 }
 
 async function retry(tid) {
@@ -91,6 +94,8 @@ async function retry(tid) {
 
 async function triggerRun(m) {
   await fetch(`/api/modules/${m.type}/${m.id}/run`, { method: 'POST' })
+  await load()
+  schedulePoll()
 }
 
 async function toggleModule(m) {

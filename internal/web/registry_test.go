@@ -2,6 +2,7 @@ package web
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -84,5 +85,79 @@ func TestRegistryRegisterDoesNotAliasEntry(t *testing.T) {
 
 	if !r.IsEnabled(ModuleAni2Alist, "x") {
 		t.Fatal("修改 Get 返回的副本不应影响注册表内的状态")
+	}
+}
+
+// TestRunLockSingleFlight 同一任务同时只允许抢占一次执行权
+func TestRunLockSingleFlight(t *testing.T) {
+	r := NewModuleRegistry()
+
+	if !r.TryAcquireRun(ModuleAlist2Strm, "job-1") {
+		t.Fatal("首次抢占应成功")
+	}
+	if !r.IsRunning(ModuleAlist2Strm, "job-1") {
+		t.Fatal("抢占后 IsRunning 应为 true")
+	}
+	if r.TryAcquireRun(ModuleAlist2Strm, "job-1") {
+		t.Fatal("运行中重复抢占应失败")
+	}
+	// 不同任务互不影响
+	if !r.TryAcquireRun(ModuleAlist2Strm, "job-2") {
+		t.Fatal("不同任务的抢占应成功")
+	}
+	r.ReleaseRun(ModuleAlist2Strm, "job-1")
+	if r.IsRunning(ModuleAlist2Strm, "job-1") {
+		t.Fatal("释放后 IsRunning 应为 false")
+	}
+	if !r.TryAcquireRun(ModuleAlist2Strm, "job-1") {
+		t.Fatal("释放后再次抢占应成功")
+	}
+	r.ReleaseRun(ModuleAlist2Strm, "job-1")
+	r.ReleaseRun(ModuleAlist2Strm, "job-2")
+
+	// List 返回的副本应携带 Running 状态
+	r.TryAcquireRun(ModuleFileMove, "m-1")
+	r.Register(&ModuleEntry{Type: ModuleFileMove, ID: "m-1", Enabled: true})
+	found := false
+	for _, e := range r.List() {
+		if e.Type == ModuleFileMove && e.ID == "m-1" {
+			found = true
+			if !e.Running {
+				t.Fatal("List 副本应携带 Running=true")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("List 未返回已注册模块")
+	}
+	r.ReleaseRun(ModuleFileMove, "m-1")
+}
+
+// TestRunLockConcurrentHammer 高并发下同时最多只有一个持有者（-race 验证无竞争）
+func TestRunLockConcurrentHammer(t *testing.T) {
+	r := NewModuleRegistry()
+	var current, maxSeen atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if r.TryAcquireRun(ModuleAlistSync, "hammer") {
+				cur := current.Add(1)
+				for {
+					old := maxSeen.Load()
+					if cur <= old || maxSeen.CompareAndSwap(old, cur) {
+						break
+					}
+				}
+				time.Sleep(5 * time.Millisecond) // 放大重叠窗口：锁若失效必被发现
+				current.Add(-1)
+				r.ReleaseRun(ModuleAlistSync, "hammer")
+			}
+		}()
+	}
+	wg.Wait()
+	if got := maxSeen.Load(); got != 1 {
+		t.Fatalf("同时最多应只有 1 个持有者，实际最大并发 = %d", got)
 	}
 }

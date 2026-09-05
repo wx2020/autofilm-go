@@ -14,18 +14,23 @@
 import { ref, onMounted } from 'vue'
 import ModuleCard from '../components/ModuleCard.vue'
 import ModuleConfigEditor from '../components/ModuleConfigEditor.vue'
+import { useRunningPoll } from '../useRunningPoll.js'
 
 const modules = ref([])
+const { schedulePoll } = useRunningPoll(load, modules)
 const defaults = { id: 'poster', enable: true, run_on_start: false, url: 'http://127.0.0.1:8096', api_key: '', title_font_path: '/fonts/title.ttf', subtitle_font_path: '/fonts/subtitle.ttf', configs: [{ library_name: 'Movies', title: '电影', subtitle: 'Movie Library', limit: 15 }], cron: '0 0 4 * * *' }
 
 async function load() {
   const res = await fetch('/api/modules')
   const all = await res.json()
   modules.value = all.filter(m => m.type === 'libraryposter')
+  schedulePoll()
 }
 
 async function triggerRun(m) {
   await fetch(`/api/modules/${m.type}/${m.id}/run`, { method: 'POST' })
+  await load()
+  schedulePoll()
 }
 
 async function toggleModule(m) {

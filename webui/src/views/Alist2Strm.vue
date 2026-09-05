@@ -15,8 +15,10 @@
 import { ref, onMounted } from 'vue'
 import ModuleCard from '../components/ModuleCard.vue'
 import ModuleConfigEditor from '../components/ModuleConfigEditor.vue'
+import { useRunningPoll } from '../useRunningPoll.js'
 
 const modules = ref([])
+const { schedulePoll } = useRunningPoll(load, modules)
 const defaults = { id: 'alist-main', enable: true, run_on_start: false, url: 'http://127.0.0.1:5244', username: '', password: '', token: '', public_url: '', source_dir: '/', target_dir: '/media', flatten_mode: false, subtitle: true, image: false, nfo: false, mode: 'AlistURL', overwrite: false, sync_server: true, scan_mode: 'incremental', qps_limit: 10, max_workers: 50, max_downloaders: 5, wait_time: 0, cron: '0 0 */6 * * *' }
 
 async function load() {
@@ -25,10 +27,13 @@ async function load() {
     const all = await res.json()
     modules.value = all.filter(m => m.type === 'alist2strm')
   } catch (e) { console.error(e) }
+  schedulePoll()
 }
 
 async function triggerRun(m) {
   await fetch(`/api/modules/${m.type}/${m.id}/run`, { method: 'POST' })
+  await load()
+  schedulePoll()
 }
 
 async function toggleModule(m) {
