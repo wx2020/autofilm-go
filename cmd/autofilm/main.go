@@ -230,33 +230,33 @@ func main() {
 	cronScheduler := newScheduler()
 
 	// 添加Alist2Strm任务
-	if err := addAlist2StrmJobs(cronScheduler); err != nil {
+	if err := addAlist2StrmJobs(cronScheduler, true); err != nil {
 		logger.Errorf("添加Alist2Strm任务失败: %v", err)
 	} else {
 		logger.Info("Alist2Strm任务添加完成")
 	}
 
 	// 添加Ani2Alist任务
-	if err := addAni2AlistJobs(cronScheduler); err != nil {
+	if err := addAni2AlistJobs(cronScheduler, true); err != nil {
 		logger.Errorf("添加Ani2Alist任务失败: %v", err)
 	} else {
 		logger.Info("Ani2Alist任务添加完成")
 	}
 
 	// 添加LibraryPoster任务
-	if err := addLibraryPosterJobs(cronScheduler); err != nil {
+	if err := addLibraryPosterJobs(cronScheduler, true); err != nil {
 		logger.Errorf("添加LibraryPoster任务失败: %v", err)
 	} else {
 		logger.Info("LibraryPoster任务添加完成")
 	}
 
 	// 添加FileMove任务
-	if err := addFileMoveJobs(cronScheduler); err != nil {
+	if err := addFileMoveJobs(cronScheduler, true); err != nil {
 		logger.Errorf("add FileMove jobs failed: %v", err)
 	}
 
 	// 添加AlistSync任务
-	if err := addAlistSyncJobs(cronScheduler); err != nil {
+	if err := addAlistSyncJobs(cronScheduler, true); err != nil {
 		logger.Errorf("添加AlistSync任务失败: %v", err)
 	} else {
 		logger.Info("AlistSync任务添加完成")
@@ -278,13 +278,13 @@ func main() {
 				scheduler.stopActive()
 				web.GetModuleRegistry().Clear()
 
-				// 重建 cron 调度器
+				// 重建 cron 调度器（热重载不触发 run_on_start，只在进程启动时触发一次）
 				newSched := newScheduler()
-				addAlist2StrmJobs(newSched)
-				addAni2AlistJobs(newSched)
-				addLibraryPosterJobs(newSched)
-				addAlistSyncJobs(newSched)
-				addFileMoveJobs(newSched)
+				addAlist2StrmJobs(newSched, false)
+				addAni2AlistJobs(newSched, false)
+				addLibraryPosterJobs(newSched, false)
+				addAlistSyncJobs(newSched, false)
+				addFileMoveJobs(newSched, false)
 
 				scheduler.set(newSched)
 				newSched.Start()
@@ -345,7 +345,8 @@ func getModuleConfigs(moduleType string) []map[string]interface{} {
 }
 
 // addAlist2StrmJobs 添加Alist2Strm定时任务
-func addAlist2StrmJobs(c *cron.Cron) error {
+// fireRunOnStart 为 true 时才会触发 run_on_start 任务：进程启动传 true，配置热重载传 false
+func addAlist2StrmJobs(c *cron.Cron, fireRunOnStart bool) error {
 	serverList := getAlist2StrmList()
 
 	if len(serverList) == 0 {
@@ -399,7 +400,8 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 			logger.Infof("%s 已被添加至后台任务 (cron: %s)", config.ID, config.Cron)
 		}
 
-		if config.RunOnStart && config.Enable {
+		// run_on_start 仅在进程启动时触发，配置热重载不再重复触发
+		if fireRunOnStart && config.RunOnStart && config.Enable {
 			logger.Infof("%s 已配置 run_on_start，启动时立即执行一次", config.ID)
 			go runA2S()
 		}
@@ -409,7 +411,8 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 }
 
 // addAni2AlistJobs 添加Ani2Alist定时任务
-func addAni2AlistJobs(c *cron.Cron) error {
+// fireRunOnStart 为 true 时才会触发 run_on_start 任务：进程启动传 true，配置热重载传 false
+func addAni2AlistJobs(c *cron.Cron, fireRunOnStart bool) error {
 	list := getAni2AlistList()
 
 	if len(list) == 0 {
@@ -463,7 +466,8 @@ func addAni2AlistJobs(c *cron.Cron) error {
 			logger.Infof("%s 已被添加至后台任务 (cron: %s)", config.ID, config.Cron)
 		}
 
-		if config.RunOnStart && config.Enable {
+		// run_on_start 仅在进程启动时触发，配置热重载不再重复触发
+		if fireRunOnStart && config.RunOnStart && config.Enable {
 			logger.Infof("%s 已配置 run_on_start，启动时立即执行一次", config.ID)
 			go runA2A()
 		}
@@ -473,7 +477,8 @@ func addAni2AlistJobs(c *cron.Cron) error {
 }
 
 // addLibraryPosterJobs 添加LibraryPoster定时任务
-func addLibraryPosterJobs(c *cron.Cron) error {
+// fireRunOnStart 为 true 时才会触发 run_on_start 任务：进程启动传 true，配置热重载传 false
+func addLibraryPosterJobs(c *cron.Cron, fireRunOnStart bool) error {
 	list := getModuleConfigs("libraryposter")
 
 	if len(list) == 0 {
@@ -527,7 +532,8 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 			logger.Infof("%s 已被添加至后台任务 (cron: %s)", config.ID, config.Cron)
 		}
 
-		if config.RunOnStart && config.Enable {
+		// run_on_start 仅在进程启动时触发，配置热重载不再重复触发
+		if fireRunOnStart && config.RunOnStart && config.Enable {
 			logger.Infof("%s 已配置 run_on_start，启动时立即执行一次", config.ID)
 			go runLP()
 		}
@@ -537,7 +543,8 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 }
 
 // addAlistSyncJobs 添加AlistSync定时任务
-func addAlistSyncJobs(c *cron.Cron) error {
+// fireRunOnStart 为 true 时才会触发 run_on_start 任务：进程启动传 true，配置热重载传 false
+func addAlistSyncJobs(c *cron.Cron, fireRunOnStart bool) error {
 	list := getAlisyncList()
 
 	if len(list) == 0 {
@@ -592,7 +599,8 @@ func addAlistSyncJobs(c *cron.Cron) error {
 			logger.Infof("AlistSync %s 已被添加至后台任务 (cron: %s)", config.ID, config.Cron)
 		}
 
-		if config.RunOnStart && config.Enable {
+		// run_on_start 仅在进程启动时触发，配置热重载不再重复触发
+		if fireRunOnStart && config.RunOnStart && config.Enable {
 			logger.Infof("AlistSync %s 已配置 run_on_start，启动时立即执行一次", config.ID)
 			go runSync()
 		}
@@ -602,7 +610,7 @@ func addAlistSyncJobs(c *cron.Cron) error {
 }
 
 // parseAlistSyncConfig 解析AlistSync配置
-func addFileMoveJobs(c *cron.Cron) error {
+func addFileMoveJobs(c *cron.Cron, fireRunOnStart bool) error {
 	list := getFileMoveList()
 	if len(list) == 0 {
 		return nil
@@ -646,7 +654,8 @@ func addFileMoveJobs(c *cron.Cron) error {
 		if _, err := c.AddFunc(config.Cron, runFileMove); err != nil {
 			logger.Errorf("add FileMove job failed %s: %v", config.ID, err)
 		}
-		if config.RunOnStart && config.Enable {
+		// run_on_start 仅在进程启动时触发，配置热重载不再重复触发
+		if fireRunOnStart && config.RunOnStart && config.Enable {
 			go runFileMove()
 		}
 	}
