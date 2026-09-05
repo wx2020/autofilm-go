@@ -33,17 +33,30 @@ type ModuleEntry struct {
 // ModuleRegistry 模块注册表
 // 并发约定：所有对 entry 字段的读取都通过返回副本完成，
 // 写操作（Register/SetEnabled）持写锁，避免读写竞争。
+// NextRun 在每次读取时新鲜计算（副本内），注册表内不长期保存，
+// 避免零值/陈旧时间被展示为 1/1/1。
 type ModuleRegistry struct {
 	mu      sync.RWMutex
 	entries map[string]*ModuleEntry
-	parser  cron.Parser
+}
+
+// sharedCronParser 全局统一的 cron 解析器：秒字段可选（兼容 5 段与 6 段
+// 表达式），同时支持 @daily/@every 等描述符。
+// 注册表、cron 调度器、WebUI 校验必须使用同一份，避免“校验通过但排期
+// 失败”或“排期成功但下次运行显示 1/1/1”。
+var sharedCronParser = cron.NewParser(
+	cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
+)
+
+// SharedCronParser 返回全局统一的 cron 解析器
+func SharedCronParser() cron.Parser {
+	return sharedCronParser
 }
 
 // NewModuleRegistry 创建模块注册表
 func NewModuleRegistry() *ModuleRegistry {
 	return &ModuleRegistry{
 		entries: make(map[string]*ModuleEntry),
-		parser:  cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
 	}
 }
 
@@ -52,11 +65,12 @@ func (r *ModuleRegistry) key(typ ModuleType, id string) string {
 }
 
 // computeNextRun 纯函数：根据 cron 计算下次运行时间（不修改 entry）
-func (r *ModuleRegistry) computeNextRun(cronSpec string, enabled bool) time.Time {
+// cron 为空、模块禁用或表达式非法时返回零时间，调用方应将其隐藏而非展示
+func computeNextRun(cronSpec string, enabled bool) time.Time {
 	if cronSpec == "" || !enabled {
 		return time.Time{}
 	}
-	schedule, err := r.parser.Parse(cronSpec)
+	schedule, err := sharedCronParser.Parse(cronSpec)
 	if err != nil {
 		return time.Time{}
 	}
@@ -68,7 +82,6 @@ func (r *ModuleRegistry) Register(entry *ModuleEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	stored := *entry
-	stored.NextRun = r.computeNextRun(entry.Cron, entry.Enabled)
 	r.entries[r.key(entry.Type, entry.ID)] = &stored
 }
 
@@ -79,7 +92,7 @@ func (r *ModuleRegistry) Unregister(typ ModuleType, id string) {
 	delete(r.entries, r.key(typ, id))
 }
 
-// Get 获取模块副本（返回副本以避免外部修改共享状态）
+// Get 获取模块副本（返回 NextRun 新鲜计算的副本，避免外部修改共享状态）
 func (r *ModuleRegistry) Get(typ ModuleType, id string) *ModuleEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -88,6 +101,7 @@ func (r *ModuleRegistry) Get(typ ModuleType, id string) *ModuleEntry {
 		return nil
 	}
 	e := *entry
+	e.NextRun = computeNextRun(e.Cron, e.Enabled)
 	return &e
 }
 
@@ -111,29 +125,30 @@ func (r *ModuleRegistry) SetEnabled(typ ModuleType, id string, enabled bool) boo
 		return false
 	}
 	entry.Enabled = enabled
-	entry.NextRun = r.computeNextRun(entry.Cron, enabled)
 	return true
 }
 
-// List 列出所有模块（返回副本）
+// List 列出所有模块（返回 NextRun 新鲜计算的副本）
 func (r *ModuleRegistry) List() []*ModuleEntry {
 	r.mu.RLock()
 	result := make([]*ModuleEntry, 0, len(r.entries))
 	for _, entry := range r.entries {
 		e := *entry
+		e.NextRun = computeNextRun(e.Cron, e.Enabled)
 		result = append(result, &e)
 	}
 	r.mu.RUnlock()
 	return result
 }
 
-// ListByType 按类型列出模块（返回副本）
+// ListByType 按类型列出模块（返回 NextRun 新鲜计算的副本）
 func (r *ModuleRegistry) ListByType(typ ModuleType) []*ModuleEntry {
 	r.mu.RLock()
 	var result []*ModuleEntry
 	for _, entry := range r.entries {
 		if entry.Type == typ {
 			e := *entry
+			e.NextRun = computeNextRun(e.Cron, e.Enabled)
 			result = append(result, &e)
 		}
 	}

@@ -63,7 +63,9 @@ func (a cronLogAdapter) Error(err error, msg string, keysAndValues ...interface{
 
 func newScheduler() *cron.Cron {
 	return cron.New(
-		cron.WithSeconds(),
+		// 使用与注册表、WebUI 校验同一份解析器，保证“校验通过即能排期、
+		// 排期成功即能算出下次运行”，支持 5/6 段表达式与 @daily 等描述符
+		cron.WithParser(web.SharedCronParser()),
 		// 捕获任务 panic，避免单个模块异常导致整个进程退出
 		cron.WithChain(cron.Recover(cronLogAdapter{logger})),
 	)

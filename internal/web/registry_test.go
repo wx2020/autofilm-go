@@ -3,7 +3,47 @@ package web
 import (
 	"sync"
 	"testing"
+	"time"
 )
+
+// TestNextRunAcrossCronFormats 验证共享解析器一致性：
+// 6 段、5 段、描述符表达式都能算出有效的下次运行时间（不再显示 1/1/1），
+// 非法表达式与禁用模块返回零时间（前端负责隐藏）。
+func TestNextRunAcrossCronFormats(t *testing.T) {
+	r := NewModuleRegistry()
+	valid := map[string]string{
+		"six":   "0 0 */6 * * *",
+		"five":  "0 */6 * * *",
+		"daily": "@daily",
+		"every": "@every 10m",
+	}
+	for id, spec := range valid {
+		r.Register(&ModuleEntry{Type: ModuleAlist2Strm, ID: id, Enabled: true, Cron: spec})
+		got := r.Get(ModuleAlist2Strm, id)
+		if got.NextRun.IsZero() {
+			t.Errorf("cron %q 解析结果为零时间（会显示 1/1/1）", spec)
+			continue
+		}
+		if got.NextRun.Before(time.Now()) {
+			t.Errorf("cron %q 的下次运行时间 %v 在过去", spec, got.NextRun)
+		}
+	}
+	// 同一份解析器必须同时被调度器与校验使用
+	for spec := range valid {
+		if _, err := SharedCronParser().Parse(valid[spec]); err != nil {
+			t.Errorf("共享解析器无法解析 %q: %v", valid[spec], err)
+		}
+	}
+
+	r.Register(&ModuleEntry{Type: ModuleAlist2Strm, ID: "bad", Enabled: true, Cron: "not a cron"})
+	if !r.Get(ModuleAlist2Strm, "bad").NextRun.IsZero() {
+		t.Error("非法表达式应返回零时间")
+	}
+	r.Register(&ModuleEntry{Type: ModuleAlist2Strm, ID: "off", Enabled: false, Cron: "0 0 */6 * * *"})
+	if !r.Get(ModuleAlist2Strm, "off").NextRun.IsZero() {
+		t.Error("禁用模块应返回零时间")
+	}
+}
 
 // TestRegistryConcurrentAccess 在 -race 下验证并发 List/Get/SetEnabled 安全
 func TestRegistryConcurrentAccess(t *testing.T) {

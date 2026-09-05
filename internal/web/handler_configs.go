@@ -14,7 +14,6 @@ import (
 	"github.com/akimio/autofilm/internal/modules/filemove"
 	"github.com/akimio/autofilm/internal/storage"
 	"github.com/go-chi/chi/v5"
-	"github.com/robfig/cron/v3"
 )
 
 var moduleTypes = map[string]bool{"alist2strm": true, "ani2alist": true, "libraryposter": true, "alistsync": true, "filemove": true}
@@ -76,8 +75,8 @@ func validateModuleConfig(typ string, cfg map[string]interface{}) error {
 		return fmt.Errorf("配置 ID 格式无效")
 	}
 	spec := fmt.Sprint(cfg["cron"])
-	parser := cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
-	if _, err := parser.Parse(spec); err != nil {
+	// 使用与调度器、注册表同一份解析器校验，避免“保存成功但排期失败”
+	if _, err := SharedCronParser().Parse(spec); err != nil {
 		return fmt.Errorf("Cron 表达式无效: %w", err)
 	}
 	if typ != "libraryposter" && typ != "filemove" {
