@@ -118,9 +118,9 @@ func New(cfg *Config) (*Alist2Strm, error) {
 			cfg.SmartProtection.GraceScans,
 		)
 		if err := a2s.protection.Load(); err != nil {
-			a2s.logger.Warnf("加载保护状态失败: %v", err)
+			a2s.warnf("加载保护状态失败: %v", err)
 		}
-		a2s.logger.Infof(".strm保护已启用：阈值=%d，宽限期=%d",
+		a2s.infof(".strm保护已启用：阈值=%d，宽限期=%d",
 			cfg.SmartProtection.Threshold, cfg.SmartProtection.GraceScans)
 	}
 
@@ -128,6 +128,23 @@ func New(cfg *Config) (*Alist2Strm, error) {
 	a2s.cacheDir = filepath.Join(core.GetSettings().GetConfigDir(), "cache")
 
 	return a2s, nil
+}
+
+// 日志 helper：所有日志自动带任务 ID 前缀，多配置并发时可区分归属
+func (a2s *Alist2Strm) infof(format string, args ...interface{}) {
+	a2s.logger.Infof("[%s] %s", a2s.config.ID, fmt.Sprintf(format, args...))
+}
+
+func (a2s *Alist2Strm) warnf(format string, args ...interface{}) {
+	a2s.logger.Warnf("[%s] %s", a2s.config.ID, fmt.Sprintf(format, args...))
+}
+
+func (a2s *Alist2Strm) errorf(format string, args ...interface{}) {
+	a2s.logger.Errorf("[%s] %s", a2s.config.ID, fmt.Sprintf(format, args...))
+}
+
+func (a2s *Alist2Strm) debugf(format string, args ...interface{}) {
+	a2s.logger.Debugf("[%s] %s", a2s.config.ID, fmt.Sprintf(format, args...))
 }
 
 // Run 运行Alist2Strm处理
@@ -142,13 +159,13 @@ func (a2s *Alist2Strm) Run(ctx context.Context) error {
 
 // runFull 全量扫描模式（原有 IterPath 行为）
 func (a2s *Alist2Strm) runFull(ctx context.Context) error {
-	a2s.logger.Info("开始Alist2Strm全量扫描")
+	a2s.infof("开始Alist2Strm全量扫描")
 
 	// 全量模式同样应用 QPS 限流，避免大目录扫描压垮服务器
 	qps := a2s.calcQPS()
 	if qps > 0 {
 		a2s.client.SetRateLimit(qps)
-		a2s.logger.Debugf("QPS限流已设置: %d", qps)
+		a2s.debugf("QPS限流已设置: %d", qps)
 	}
 
 	waitTime := time.Duration(a2s.config.WaitTime) * time.Second
@@ -200,7 +217,7 @@ func (a2s *Alist2Strm) runFull(ctx context.Context) error {
 				continue
 			}
 			scanComplete = false
-			a2s.logger.Errorf("遍历路径出错: %v", err)
+			a2s.errorf("遍历路径出错: %v", err)
 
 		case <-ctx.Done():
 			close(pathCh)
@@ -216,7 +233,7 @@ func (a2s *Alist2Strm) runFull(ctx context.Context) error {
 
 	// 第二阶段：处理BDMV最大文件
 	for _, largestFile := range a2s.bdmvManager.GetLargestFiles() {
-		a2s.logger.Infof("处理BDMV文件: %s (%.1f MB)",
+		a2s.infof("处理BDMV文件: %s (%.1f MB)",
 			largestFile.Name, float64(largestFile.Size)/1024/1024)
 
 		// 重新获取详细信息
@@ -224,7 +241,7 @@ func (a2s *Alist2Strm) runFull(ctx context.Context) error {
 		if a2s.mode == RawURLMode && largestFile.RawURL == "" {
 			detailed, err := a2s.client.FSGet(ctx, largestFile.FullPath)
 			if err != nil {
-				a2s.logger.Warnf("重新获取BDMV文件详细信息失败: %v", err)
+				a2s.warnf("重新获取BDMV文件详细信息失败: %v", err)
 				fileToProcess = largestFile
 			} else {
 				fileToProcess = detailed
@@ -243,34 +260,34 @@ func (a2s *Alist2Strm) runFull(ctx context.Context) error {
 	// 保存保护状态
 	if a2s.protection != nil {
 		if err := a2s.protection.Save(); err != nil {
-			a2s.logger.Errorf("保存保护状态失败: %v", err)
+			a2s.errorf("保存保护状态失败: %v", err)
 		}
 	}
 
 	// 同步服务器（清理本地文件）
 	if a2s.config.SyncServer && scanComplete {
 		if err := a2s.cleanupLocalFiles(ctx); err != nil {
-			a2s.logger.Errorf("清理本地文件失败: %v", err)
+			a2s.errorf("清理本地文件失败: %v", err)
 		} else {
-			a2s.logger.Info("清理过期的.strm文件完成")
+			a2s.infof("清理过期的.strm文件完成")
 		}
 	} else if a2s.config.SyncServer {
-		a2s.logger.Warn("本次扫描未完整成功，跳过本地文件清理")
+		a2s.warnf("本次扫描未完整成功，跳过本地文件清理")
 	}
 
-	a2s.logger.Info("Alist2Strm全量扫描完成")
+	a2s.infof("Alist2Strm全量扫描完成")
 	return nil
 }
 
 // runIncremental 增量扫描模式
 func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
-	a2s.logger.Info("开始Alist2Strm增量扫描")
+	a2s.infof("开始Alist2Strm增量扫描")
 
 	// 设置 QPS 限流
 	qps := a2s.calcQPS()
 	if qps > 0 {
 		a2s.client.SetRateLimit(qps)
-		a2s.logger.Debugf("QPS限流已设置: %d", qps)
+		a2s.debugf("QPS限流已设置: %d", qps)
 	}
 
 	waitTime := time.Duration(a2s.config.WaitTime) * time.Second
@@ -278,14 +295,14 @@ func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
 	// 加载历史快照
 	oldSnap, err := LoadSnapshot(a2s.config.ID, a2s.cacheDir)
 	if err != nil {
-		a2s.logger.Warnf("加载快照失败: %v，回退至全量扫描", err)
+		a2s.warnf("加载快照失败: %v，回退至全量扫描", err)
 		return a2s.runFull(ctx)
 	}
 
 	// 轻量递归遍历（不调用 fs/get）
 	files, err := a2s.iterPathLight(ctx, a2s.config.SourceDir, waitTime)
 	if err != nil {
-		a2s.logger.Errorf("增量遍历失败: %v，回退至全量扫描", err)
+		a2s.errorf("增量遍历失败: %v，回退至全量扫描", err)
 		return a2s.runFull(ctx)
 	}
 
@@ -295,7 +312,7 @@ func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
 	// 远端成功响应但结果为空、且存在历史快照时，判定为数据源异常：
 	// 保留旧快照并跳过本轮清理，防止空列表触发全量误删
 	if len(newSnap.Files) == 0 && oldSnap != nil && len(oldSnap.Files) > 0 {
-		a2s.logger.Errorf("远端未返回任何文件（原快照 %d 个条目），疑似数据源异常：已保留旧快照并跳过本轮处理与清理",
+		a2s.errorf("远端未返回任何文件（原快照 %d 个条目），疑似数据源异常：已保留旧快照并跳过本轮处理与清理",
 			len(oldSnap.Files))
 		return nil
 	}
@@ -321,18 +338,18 @@ func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
 			localPath := a2s.getLocalPath(file)
 			if _, err := os.Stat(localPath); os.IsNotExist(err) {
 				modified = append(modified, file.FullPath)
-				a2s.logger.Infof("本地输出文件不存在，重新处理: %s", localPath)
+				a2s.infof("本地输出文件不存在，重新处理: %s", localPath)
 			}
 		}
 	} else {
-		a2s.logger.Info("无历史快照，首次运行全量处理")
+		a2s.infof("无历史快照，首次运行全量处理")
 		for path := range newSnap.Files {
 			added = append(added, path)
 		}
 	}
 
 	elapsed := time.Since(startTime)
-	a2s.logger.Infof("增量扫描结果: 全量=%d, 新增=%d, 修改=%d, 删除=%d, 耗时=%v",
+	a2s.infof("增量扫描结果: 全量=%d, 新增=%d, 修改=%d, 删除=%d, 耗时=%v",
 		len(newSnap.Files), len(added), len(modified), len(deleted), elapsed)
 
 	// 处理新增和修改的文件
@@ -354,7 +371,7 @@ func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
 			// 仅对变更文件调 fs/get 获取 RawURL（典型 1% 量级）
 			fileDetail, err := a2s.client.FSGet(ctx, fullPath)
 			if err != nil {
-				a2s.logger.Warnf("获取文件详情失败 %s: %v", fullPath, err)
+				a2s.warnf("获取文件详情失败 %s: %v", fullPath, err)
 				continue
 			}
 
@@ -384,7 +401,7 @@ func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
 		if a2s.mode == RawURLMode && largestFile.RawURL == "" {
 			detailed, err := a2s.client.FSGet(ctx, largestFile.FullPath)
 			if err != nil {
-				a2s.logger.Warnf("重新获取BDMV文件详细信息失败: %v", err)
+				a2s.warnf("重新获取BDMV文件详细信息失败: %v", err)
 				fileToProcess = largestFile
 			} else {
 				fileToProcess = detailed
@@ -403,26 +420,26 @@ func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
 
 	// 保存快照
 	if err := SaveSnapshot(a2s.config.ID, a2s.cacheDir, newSnap); err != nil {
-		a2s.logger.Errorf("保存快照失败: %v", err)
+		a2s.errorf("保存快照失败: %v", err)
 	}
 
 	// 保存保护状态
 	if a2s.protection != nil {
 		if err := a2s.protection.Save(); err != nil {
-			a2s.logger.Errorf("保存保护状态失败: %v", err)
+			a2s.errorf("保存保护状态失败: %v", err)
 		}
 	}
 
 	// 同步服务器（清理本地文件，含已删除文件）
 	if a2s.config.SyncServer {
 		if err := a2s.cleanupLocalFiles(ctx); err != nil {
-			a2s.logger.Errorf("清理本地文件失败: %v", err)
+			a2s.errorf("清理本地文件失败: %v", err)
 		} else {
-			a2s.logger.Info("清理过期的.strm文件完成")
+			a2s.infof("清理过期的.strm文件完成")
 		}
 	}
 
-	a2s.logger.Info("Alist2Strm增量扫描完成")
+	a2s.infof("Alist2Strm增量扫描完成")
 	return nil
 }
 
@@ -497,14 +514,14 @@ func (a2s *Alist2Strm) processFile(ctx context.Context, path *alist.AlistPath) {
 
 	// 确保目录存在
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
-		a2s.logger.Errorf("创建目录失败: %v", err)
+		a2s.errorf("创建目录失败: %v", err)
 		return
 	}
 
 	// 生成内容
 	content := a2s.generateContent(path)
 	if content == "" {
-		a2s.logger.Warnf("文件 %s 的内容为空，跳过处理", path.FullPath)
+		a2s.warnf("文件 %s 的内容为空，跳过处理", path.FullPath)
 		return
 	}
 
@@ -513,22 +530,22 @@ func (a2s *Alist2Strm) processFile(ctx context.Context, path *alist.AlistPath) {
 		// 原子写入：先写临时文件再 rename，避免中断产生损坏的 .strm
 		tmpPath := localPath + ".tmp"
 		if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
-			a2s.logger.Errorf("创建.strm文件失败: %v", err)
+			a2s.errorf("创建.strm文件失败: %v", err)
 			return
 		}
 		if err := os.Rename(tmpPath, localPath); err != nil {
 			os.Remove(tmpPath)
-			a2s.logger.Errorf("创建.strm文件失败: %v", err)
+			a2s.errorf("创建.strm文件失败: %v", err)
 			return
 		}
-		a2s.logger.Infof("%s 创建成功", filepath.Base(localPath))
+		a2s.infof("%s 创建成功", filepath.Base(localPath))
 	} else {
 		// 下载文件
 		if err := a2s.downloadFile(ctx, path.RawURL, localPath); err != nil {
-			a2s.logger.Errorf("下载文件失败: %v", err)
+			a2s.errorf("下载文件失败: %v", err)
 			return
 		}
-		a2s.logger.Infof("%s 下载成功", filepath.Base(localPath))
+		a2s.infof("%s 下载成功", filepath.Base(localPath))
 	}
 }
 
@@ -676,11 +693,11 @@ func (a2s *Alist2Strm) cleanupLocalFiles(ctx context.Context) error {
 	a2s.processedMu.RUnlock()
 	if seen == 0 {
 		err := fmt.Errorf("远端扫描结果为空，为防误删已跳过本地清理，请检查 Alist/OpenList 数据源")
-		a2s.logger.Error(err)
+		a2s.errorf("%v", err)
 		return err
 	}
 
-	a2s.logger.Info("开始清理本地文件")
+	a2s.infof("开始清理本地文件")
 
 	var allLocalFiles []string
 	var err error
@@ -762,14 +779,14 @@ func (a2s *Alist2Strm) cleanupLocalFiles(ctx context.Context) error {
 	for file := range filesToDelete {
 		// 检查忽略模式
 		if syncIgnorePattern != nil && syncIgnorePattern.MatchString(filepath.Base(file)) {
-			a2s.logger.Debugf("文件 %s 在忽略列表中，跳过删除", filepath.Base(file))
+			a2s.debugf("文件 %s 在忽略列表中，跳过删除", filepath.Base(file))
 			continue
 		}
 
 		if err := os.Remove(file); err != nil {
-			a2s.logger.Errorf("删除文件失败: %v", err)
+			a2s.errorf("删除文件失败: %v", err)
 		} else {
-			a2s.logger.Infof("删除文件: %s", file)
+			a2s.infof("删除文件: %s", file)
 		}
 
 		// 删除空目录
@@ -792,7 +809,7 @@ func (a2s *Alist2Strm) removeEmptyDirs(dir string) {
 
 	if len(entries) == 0 {
 		os.Remove(dir)
-		a2s.logger.Infof("删除空目录: %s", dir)
+		a2s.infof("删除空目录: %s", dir)
 		a2s.removeEmptyDirs(filepath.Dir(dir))
 	}
 }
