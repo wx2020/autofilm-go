@@ -23,9 +23,11 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import ModuleCard from '../components/ModuleCard.vue'
+import { useRunningPoll } from '../useRunningPoll.js'
 
 const modules = ref([])
 const stats = ref([])
+const { schedulePoll } = useRunningPoll(loadModules, modules)
 
 async function loadModules() {
   try {
@@ -41,11 +43,13 @@ async function loadModules() {
   } catch (e) {
     console.error(e)
   }
+  schedulePoll()
 }
 
 async function triggerRun(m) {
   await fetch(`/api/modules/${m.type}/${m.id}/run`, { method: 'POST' })
-  loadModules()
+  await loadModules()
+  schedulePoll()
 }
 
 async function toggleModule(m) {

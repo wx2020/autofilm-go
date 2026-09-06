@@ -15,8 +15,10 @@
 import { ref, onMounted } from 'vue'
 import ModuleCard from '../components/ModuleCard.vue'
 import ModuleConfigEditor from '../components/ModuleConfigEditor.vue'
+import { useRunningPoll } from '../useRunningPoll.js'
 
 const modules = ref([])
+const { schedulePoll } = useRunningPoll(load, modules)
 const defaults = {
   id: 'file-archive', enable: true, run_on_start: false, backend: 'local', url: 'http://127.0.0.1:5244', username: '', password: '', token: '',
   source_dir: 'D:/downloads', target_dir: 'D:/media', regex: '(?i)\\.(mkv|mp4)$',
@@ -31,10 +33,13 @@ async function load() {
     const all = await res.json()
     modules.value = Array.isArray(all) ? all.filter(m => m.type === 'filemove') : []
   } catch (e) { console.error(e) }
+  schedulePoll()
 }
 
 async function triggerRun(m) {
   await fetch(`/api/modules/${m.type}/${m.id}/run`, { method: 'POST' })
+  await load()
+  schedulePoll()
 }
 
 async function toggleModule(m) {

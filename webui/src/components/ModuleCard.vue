@@ -8,14 +8,15 @@
             {{ module.enabled ? '已启用' : '已禁用' }}
           </span>
           <span class="badge bg-info ms-2">{{ module.type }}</span>
+          <span v-if="module.running" class="badge bg-warning text-dark ms-2">运行中</span>
         </div>
         <div class="d-flex gap-2">
           <button class="btn btn-sm" :class="module.enabled ? 'btn-warning' : 'btn-success'"
                   @click="$emit('toggle')">
             <i :class="module.enabled ? 'bi-pause' : 'bi-play'"></i>
           </button>
-          <button class="btn btn-sm btn-primary" @click="$emit('run')" :disabled="!module.enabled">
-            <i class="bi-play-fill"></i> 运行
+          <button class="btn btn-sm btn-primary" @click="$emit('run')" :disabled="!module.enabled || module.running">
+            <i class="bi-play-fill"></i> {{ module.running ? '运行中…' : '运行' }}
           </button>
         </div>
       </div>

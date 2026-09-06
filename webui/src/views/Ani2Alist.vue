@@ -14,18 +14,23 @@
 import { ref, onMounted } from 'vue'
 import ModuleCard from '../components/ModuleCard.vue'
 import ModuleConfigEditor from '../components/ModuleConfigEditor.vue'
+import { useRunningPoll } from '../useRunningPoll.js'
 
 const modules = ref([])
+const { schedulePoll } = useRunningPoll(load, modules)
 const defaults = { id: 'anime', enable: true, run_on_start: false, url: 'http://127.0.0.1:5244', username: '', password: '', token: '', target_dir: '/Anime', rss_update: true, src_domain: 'aniopen.an-i.workers.dev', rss_domain: 'api.ani.rip', key_word: '', cron: '0 0 */12 * * *' }
 
 async function load() {
   const res = await fetch('/api/modules')
   const all = await res.json()
   modules.value = all.filter(m => m.type === 'ani2alist')
+  schedulePoll()
 }
 
 async function triggerRun(m) {
   await fetch(`/api/modules/${m.type}/${m.id}/run`, { method: 'POST' })
+  await load()
+  schedulePoll()
 }
 
 async function toggleModule(m) {

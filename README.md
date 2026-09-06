@@ -157,7 +157,7 @@ Docker Compose 会将 `config/`、`logs/` 和 `data/` 持久化到容器的 `/ap
 - Web 指标：`GET /api/metrics`
 - 健康检查（无需鉴权）：`GET /api/health`
 - 模块列表：`GET /api/modules`
-- 模块手动执行：`POST /api/modules/{type}/{id}/run`
+- 模块手动执行：`POST /api/modules/{type}/{id}/run`（同一任务同时只允许跑一个，运行中再次触发返回 `409`）
 - 模块启停：`POST /api/modules/{type}/{id}/toggle`
 
 任务失败会写入运行记录和告警表；配置了 Webhook 后，会向 Webhook 地址发送 JSON 告警。

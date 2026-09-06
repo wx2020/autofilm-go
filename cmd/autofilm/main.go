@@ -86,6 +86,21 @@ func safeRun(moduleType web.ModuleType, configID string, fn func()) func() {
 	}
 }
 
+// withSingleFlight 保证同一任务同时只跑一个。
+// 定时触发（cron/run_on_start）经此包装抢占执行锁；手动触发由
+// handleRunModule 在响应前抢占。抢占失败说明上次运行尚未结束，
+// 直接跳过，避免多次点击运行导致任务累加。
+func withSingleFlight(moduleType web.ModuleType, configID string, fn func()) func() {
+	return func() {
+		if !web.GetModuleRegistry().TryAcquireRun(moduleType, configID) {
+			logger.Warnf("模块 %s/%s 上次运行尚未结束，跳过本次触发", moduleType, configID)
+			return
+		}
+		defer web.GetModuleRegistry().ReleaseRun(moduleType, configID)
+		fn()
+	}
+}
+
 // schedulerHolder 并发安全的调度器容器，
 // 主协程与配置重载协程通过它共享 cron 实例，消除变量级数据竞争。
 type schedulerHolder struct {
@@ -374,7 +389,7 @@ func addAlist2StrmJobs(c *cron.Cron) error {
 		})
 		web.GetModuleRegistry().Register(entry)
 
-		runA2S := entry.RunFunc
+		runA2S := withSingleFlight(web.ModuleAlist2Strm, config.ID, entry.RunFunc)
 
 		_, err = c.AddFunc(config.Cron, runA2S)
 
@@ -438,7 +453,7 @@ func addAni2AlistJobs(c *cron.Cron) error {
 		})
 		web.GetModuleRegistry().Register(entry)
 
-		runA2A := entry.RunFunc
+		runA2A := withSingleFlight(web.ModuleAni2Alist, config.ID, entry.RunFunc)
 
 		_, err = c.AddFunc(config.Cron, runA2A)
 
@@ -502,7 +517,7 @@ func addLibraryPosterJobs(c *cron.Cron) error {
 		})
 		web.GetModuleRegistry().Register(entry)
 
-		runLP := entry.RunFunc
+		runLP := withSingleFlight(web.ModuleLibraryPoster, config.ID, entry.RunFunc)
 
 		_, err = c.AddFunc(config.Cron, runLP)
 
@@ -567,7 +582,7 @@ func addAlistSyncJobs(c *cron.Cron) error {
 		})
 		web.GetModuleRegistry().Register(entry)
 
-		runSync := entry.RunFunc
+		runSync := withSingleFlight(web.ModuleAlistSync, config.ID, entry.RunFunc)
 
 		_, err = c.AddFunc(config.Cron, runSync)
 
@@ -627,7 +642,7 @@ func addFileMoveJobs(c *cron.Cron) error {
 			}
 		})
 		web.GetModuleRegistry().Register(entry)
-		runFileMove := entry.RunFunc
+		runFileMove := withSingleFlight(web.ModuleFileMove, config.ID, entry.RunFunc)
 		if _, err := c.AddFunc(config.Cron, runFileMove); err != nil {
 			logger.Errorf("add FileMove job failed %s: %v", config.ID, err)
 		}
