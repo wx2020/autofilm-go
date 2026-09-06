@@ -27,8 +27,12 @@ func (as *Alissync) syncPair(ctx context.Context, pair PairConfig) error {
 	for _, f := range srcFiles {
 		dstPath := replacePrefix(f.FullPath, pair.Src, pair.Dst)
 
-		// 检查目标是否存在
-		existing, _ := as.client.FSGet(ctx, dstPath)
+		// 检查目标是否存在（不存在为正常预期，不打 ERROR）
+		existing, err := as.client.FSGet(ctx, dstPath)
+		if err != nil && !alist.IsNotFound(err) {
+			as.logger.Warnf("检查目标状态失败 %s: %v（按需同步继续）", dstPath, err)
+			existing = nil
+		}
 
 		// 应用覆盖策略
 		if !ShouldOverwrite(OverwritePolicy(pair.Overwrite), &f, existing) {
