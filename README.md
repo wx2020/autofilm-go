@@ -121,6 +121,12 @@ FileMove 的 `backend` 默认为 `local`。设置为 `openlist` 后，模块通�
 
 OpenList 模式需要额外配置 `url`、`username`/`password` 或 `token`，且 `source_dir`、`target_dir` 必须使用 OpenList 路径（以 `/` 开头）。FileMove 仅支持同一个 OpenList 实例内移动；跨 OpenList 实例的整目录同步仍使用 AlistSync。
 
+### 启动时立即运行与任务单飞
+
+各模块配置的 `run_on_start: true` 表示**进程启动时**立即执行一次，不等待 cron。配置热重载（保存/启停/删除/恢复配置）不会重复触发它；需要立即执行请使用手动运行接口。
+
+同一任务同时只允许运行一个：手动重复触发会返回 `409`，定时触发撞车时跳过本次并记录告警。Web 界面运行中会禁用运行按钮，任务结束后自动恢复。
+
 ### AlistSync 与 FileMove 的 QPS 限流
 
 `alistsync` 和 `filemove`（`backend: openlist` 时）均支持 `qps_limit` 配置项，对发往 OpenList/Alist 服务器的 API 请求限流：
