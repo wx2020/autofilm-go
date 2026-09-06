@@ -1,7 +1,10 @@
 package alistsync
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -40,8 +43,25 @@ func NewQueueManager(queueDir string, logger *logrus.Logger) *QueueManager {
 	return &QueueManager{queueDir: queueDir, logger: logger}
 }
 
-// taskFilePath 返回任务文件路径
+// taskFilePath 返回任务文件路径（扁平化，避免 dstPath 中的 / 形成嵌套目录）
+// 命名：sanitized(截断100) + "_" + sha256(dstPath)[:8]，同 dstPath 稳定唯一
 func (qm *QueueManager) taskFilePath(taskID string) string {
+	trimmed := strings.Trim(taskID, "/")
+	safe := strings.ReplaceAll(trimmed, "/", "_")
+	safe = strings.ReplaceAll(safe, string(filepath.Separator), "_")
+	if len([]rune(safe)) > 100 {
+		runes := []rune(safe)
+		safe = string(runes[len(runes)-100:])
+	}
+	if safe == "" {
+		safe = "root"
+	}
+	sum := sha256.Sum256([]byte(taskID))
+	return filepath.Join(qm.queueDir, safe+"_"+hex.EncodeToString(sum[:])[:8]+".json")
+}
+
+// legacyTaskFilePath 兼容老版本嵌套路径（filepath.Join(queueDir, taskID+".json")）
+func (qm *QueueManager) legacyTaskFilePath(taskID string) string {
 	return filepath.Join(qm.queueDir, taskID+".json")
 }
 
@@ -164,6 +184,9 @@ func (qm *QueueManager) fileSave(task *SyncTask) error {
 		return err
 	}
 	path := qm.taskFilePath(task.ID)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return err
@@ -172,7 +195,12 @@ func (qm *QueueManager) fileSave(task *SyncTask) error {
 }
 
 func (qm *QueueManager) fileLoad(taskID string) (*SyncTask, error) {
-	data, err := os.ReadFile(qm.taskFilePath(taskID))
+	path := qm.taskFilePath(taskID)
+	data, err := os.ReadFile(path)
+	if err != nil && os.IsNotExist(err) {
+		// 兼容老版本嵌套文件
+		data, err = os.ReadFile(qm.legacyTaskFilePath(taskID))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -184,12 +212,16 @@ func (qm *QueueManager) fileLoad(taskID string) (*SyncTask, error) {
 }
 
 func (qm *QueueManager) fileDelete(taskID string) error {
-	return os.Remove(qm.taskFilePath(taskID))
+	err1 := os.Remove(qm.taskFilePath(taskID))
+	err2 := os.Remove(qm.legacyTaskFilePath(taskID))
+	if err1 != nil && err2 != nil {
+		return err1
+	}
+	return nil
 }
 
 func (qm *QueueManager) fileLoadAll() ([]*SyncTask, error) {
-	entries, err := os.ReadDir(qm.queueDir)
-	if err != nil {
+	if _, err := os.Stat(qm.queueDir); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
@@ -197,16 +229,27 @@ func (qm *QueueManager) fileLoadAll() ([]*SyncTask, error) {
 	}
 
 	var tasks []*SyncTask
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		taskID := strings.TrimSuffix(entry.Name(), ".json")
-		task, err := qm.fileLoad(taskID)
+	// 递归兼容：新版扁平文件 + 老版嵌套子目录文件
+	err := filepath.WalkDir(qm.queueDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			continue
+			return nil
 		}
-		tasks = append(tasks, task)
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".json") || strings.HasSuffix(d.Name(), ".tmp") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		var task SyncTask
+		if err := json.Unmarshal(data, &task); err != nil {
+			return nil
+		}
+		tasks = append(tasks, &task)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	sort.Slice(tasks, func(i, j int) bool {

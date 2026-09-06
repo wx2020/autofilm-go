@@ -170,7 +170,10 @@ func (d *RetryDaemon) checkPendingTask(ctx context.Context, task *SyncTask) {
 
 	case "failed", "canceled":
 		task.Attempts++
-		task.LastError = info.Status
+		task.LastError = info.Error
+		if task.LastError == "" {
+			task.LastError = info.Status
+		}
 		if d.isMaxAttemptsExceeded(task) {
 			task.State = "dead_letter"
 			d.logger.Warnf("同步任务超过最大重试次数: %s -> %s, 错误: %s",
@@ -193,6 +196,38 @@ func (d *RetryDaemon) checkRetryTask(ctx context.Context, task *SyncTask) {
 	}
 
 	d.logger.Infof("正在重试同步任务: %s -> %s (第 %d 次)", task.SrcPath, task.DstPath, task.Attempts+1)
+
+	// 失败任务（首次 FSPut 即失败）无 AlistTaskID，直接重新提交离线下载
+	if task.AlistTaskID == "" || task.RawURL == "" {
+		if task.RawURL == "" {
+			task.Attempts++
+			task.LastError = "缺少源直链 RawURL，无法重试"
+			task.NextRetryAt = d.calcNextRetry(task.Attempts)
+			d.queue.Save(task)
+			return
+		}
+		newTaskID, err := d.client.FSPut(ctx, dstDirFromPath(task.DstPath), []alist.FSPutFile{
+			{Path: fileNameFromPath(task.DstPath), URL: task.RawURL},
+		})
+		if err != nil {
+			task.Attempts++
+			task.LastError = err.Error()
+			task.NextRetryAt = d.calcNextRetry(task.Attempts)
+			if d.isMaxAttemptsExceeded(task) {
+				task.State = "dead_letter"
+				d.logger.Errorf("同步任务超过最大重试次数: %s", task.SrcPath)
+			}
+			d.queue.Save(task)
+			return
+		}
+		task.AlistTaskID = newTaskID
+		task.State = "running"
+		task.LastError = ""
+		if err := d.queue.Save(task); err != nil {
+			d.logger.Errorf("保存任务状态失败 %s: %v", task.ID, err)
+		}
+		return
+	}
 
 	if err := d.client.TaskRetry(ctx, task.AlistTaskID); err != nil {
 		d.logger.Warnf("TaskRetry 失败 %s, 尝试重新提交: %v", task.AlistTaskID, err)

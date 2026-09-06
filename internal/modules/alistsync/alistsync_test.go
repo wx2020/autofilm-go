@@ -63,6 +63,43 @@ func TestShouldOverwrite(t *testing.T) {
 	if ShouldOverwrite(OverwriteIfNewer, src, newer) {
 		t.Fatal("older source accepted")
 	}
+	// 空策略默认按 if_newer：缺失必同步，避免空配置静默不同步
+	if !ShouldOverwrite("", src, nil) {
+		t.Fatal("empty policy with nil existing should sync")
+	}
+	if !ShouldOverwrite("", src, old) {
+		t.Fatal("empty policy with older existing should sync")
+	}
+}
+
+func TestQueueFlatPathChineseRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	qm := NewQueueManager(dir, logrus.New())
+	task := &SyncTask{
+		ID:           "/wo/电视剧/Teach.You.a.Lesson.S01.2026.1080p.NF.WEB-DL.DDP5.1.Atmos.x264-GrassTV/Teach.You.a.Lesson.S01E01.2026.1080p.NF.WEB-DL.DDP5.1.Atmos.x264-GrassTV.mkv",
+		SyncConfigID: "wo_sync",
+		SrcPath:      "/pt/wo/电视剧/a.mkv",
+		DstPath:      "/wo/电视剧/Teach.You.a.Lesson.S01.2026.1080p.NF.WEB-DL.DDP5.1.Atmos.x264-GrassTV/Teach.You.a.Lesson.S01E01.2026.1080p.NF.WEB-DL.DDP5.1.Atmos.x264-GrassTV.mkv",
+		State:        "failed",
+		CreatedAt:    time.Now(),
+	}
+	if err := qm.Save(task); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := qm.Load(task.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.DstPath != task.DstPath {
+		t.Fatalf("DstPath = %q", got.DstPath)
+	}
+	all, err := qm.LoadAll()
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("LoadAll = %d, want 1", len(all))
+	}
 }
 
 func TestRetryBackoffGrows(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,21 +43,29 @@ type AlistClient struct {
 }
 
 // AlistPath Alist文件路径信息
+// OpenList v4 FsObject: is_dir(bool) 为准，type 为 0=Unknown/1=Folder/2=Video/3=Audio/4=Text/5=Image
 type AlistPath struct {
 	ServerURL string `json:"-"`
 	BasePath  string `json:"-"`
 	FullPath  string `json:"full_path"`
 	Name      string `json:"name"`
 	Size      int64  `json:"size"`
-	Type      int    `json:"type"` // 1: 文件夹, 0: 文件
+	Type      int    `json:"type"`
+	IsDirFlag *bool  `json:"is_dir,omitempty"`
 	Modified  string `json:"modified"`
 	Sign      string `json:"sign"`
 	RawURL    string `json:"raw_url,omitempty"`
 	Thumb     string `json:"thumb,omitempty"`
 }
 
-// IsDir 判断是否为目录
+// IsDir 判断是否为目录（优先 is_dir，回退 Type==1 兼容老版本）
 func (p *AlistPath) IsDir() bool {
+	if p == nil {
+		return false
+	}
+	if p.IsDirFlag != nil {
+		return *p.IsDirFlag
+	}
 	return p.Type == 1
 }
 
@@ -293,6 +302,12 @@ func (c *AlistClient) SetRateLimit(qps int) {
 }
 
 func (c *AlistClient) doRequest(ctx context.Context, method, endpoint string, jsonData []byte) (*APIResponse, error) {
+	return c.doRequestWithHeaders(ctx, method, endpoint, jsonData, nil)
+}
+
+// doRequestWithHeaders 允许调用方覆盖/追加 HTTP 头
+// （为 PUT 流式上传 octet-stream + File-Path 等场景留口，本轮离线下载仍用默认 JSON 头）
+func (c *AlistClient) doRequestWithHeaders(ctx context.Context, method, endpoint string, jsonData []byte, extraHeaders map[string]string) (*APIResponse, error) {
 	// 原子读取一次，避免读取过程中被其他协程替换导致不一致
 	if lim := c.rateLimiter.Load(); lim != nil {
 		if err := lim.Wait(ctx); err != nil {
@@ -302,6 +317,9 @@ func (c *AlistClient) doRequest(ctx context.Context, method, endpoint string, js
 
 	url := c.url + endpoint
 	headers := c.makeHeaders()
+	for k, v := range extraHeaders {
+		headers[k] = v
+	}
 
 	var resp *httpclient.Response
 	var err error
@@ -322,12 +340,13 @@ func (c *AlistClient) doRequest(ctx context.Context, method, endpoint string, js
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("请求失败，状态码: %d", resp.StatusCode)
+		return nil, fmt.Errorf("请求失败 %s，状态码: %d, body: %s", endpoint, resp.StatusCode, snippet(resp.Body))
 	}
 
 	var apiResp APIResponse
 	if err := json.Unmarshal(resp.Body, &apiResp); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %w", err)
+		return nil, fmt.Errorf("解析响应失败 %s (status=%d, content-type=%s, body=%s): %w",
+			endpoint, resp.StatusCode, resp.Header.Get("Content-Type"), snippet(resp.Body), err)
 	}
 
 	if apiResp.Code != 200 {
@@ -394,42 +413,55 @@ func (c *AlistClient) FSList(ctx context.Context, dirPath string) ([]AlistPath, 
 }
 
 // FSListLight 获取文件列表（轻量版，不发起 fs/get 请求）
+// OpenList v4 per_page 上限 100：循环翻页取全量，避免大目录截断
 // 返回的文件信息不含 RawURL；仅用于增量快照收集，降低请求量
 func (c *AlistClient) FSListLight(ctx context.Context, dirPath string) ([]AlistPath, error) {
-	type ListRequest struct {
-		Path     string `json:"path"`
-		Password string `json:"password"`
-		Page     int    `json:"page"`
-		PerPage  int    `json:"per_page"`
-		Refresh  bool   `json:"refresh"`
+	const perPage = 100
+	var all []AlistPath
+	for page := 1; ; page++ {
+		type ListRequest struct {
+			Path     string `json:"path"`
+			Password string `json:"password"`
+			Page     int    `json:"page"`
+			PerPage  int    `json:"per_page"`
+			Refresh  bool   `json:"refresh"`
+		}
+
+		req := ListRequest{
+			Path:     dirPath,
+			Password: "",
+			Page:     page,
+			PerPage:  perPage,
+			Refresh:  false,
+		}
+
+		jsonData, _ := json.Marshal(req)
+		resp, err := c.doRequest(ctx, "POST", "/api/fs/list", jsonData)
+		if err != nil {
+			return nil, err
+		}
+
+		var result FSListResponse
+		if err := json.Unmarshal(resp.Data, &result); err != nil {
+			return nil, err
+		}
+
+		for i := range result.Content {
+			result.Content[i].ServerURL = c.url
+			result.Content[i].BasePath = c.basePath
+			result.Content[i].FullPath = joinPath(dirPath, result.Content[i].Name)
+		}
+		all = append(all, result.Content...)
+
+		if len(result.Content) < perPage {
+			break
+		}
+		if result.Total > 0 && len(all) >= result.Total {
+			break
+		}
 	}
 
-	req := ListRequest{
-		Path:     dirPath,
-		Password: "",
-		Page:     1,
-		PerPage:  0,
-		Refresh:  false,
-	}
-
-	jsonData, _ := json.Marshal(req)
-	resp, err := c.doRequest(ctx, "POST", "/api/fs/list", jsonData)
-	if err != nil {
-		return nil, err
-	}
-
-	var result FSListResponse
-	if err := json.Unmarshal(resp.Data, &result); err != nil {
-		return nil, err
-	}
-
-	for i := range result.Content {
-		result.Content[i].ServerURL = c.url
-		result.Content[i].BasePath = c.basePath
-		result.Content[i].FullPath = dirPath + "/" + result.Content[i].Name
-	}
-
-	return result.Content, nil
+	return all, nil
 }
 
 // FSGet 获取文件/目录详细信息
@@ -445,21 +477,21 @@ func (c *AlistClient) FSGet(ctx context.Context, path string) (*AlistPath, error
 	}
 
 	jsonData, _ := json.Marshal(req)
-	c.logger.Debugf("[DEBUG] FSGet 请求路径: %s", path)
-	c.logger.Debugf("[DEBUG] FSGet 请求数据: %s", string(jsonData))
+	c.logger.Debugf("FSGet 请求路径: %s", path)
 
 	resp, err := c.doRequest(ctx, "POST", "/api/fs/get", jsonData)
 	if err != nil {
-		c.logger.Errorf("[ERROR] FSGet 请求失败: %v", err)
+		if IsNotFound(err) {
+			c.logger.Debugf("FSGet 目标不存在: %s", path)
+		} else {
+			c.logger.Errorf("FSGet 请求失败 %s: %v", path, err)
+		}
 		return nil, err
 	}
 
-	c.logger.Debugf("[DEBUG] FSGet 响应码: %d", resp.Code)
-	c.logger.Debugf("[DEBUG] FSGet 原始响应: %s", string(resp.Data))
-
 	var result AlistPath
 	if err := json.Unmarshal(resp.Data, &result); err != nil {
-		c.logger.Errorf("[ERROR] FSGet JSON 解析失败: %v, 原始数据: %s", err, string(resp.Data))
+		c.logger.Errorf("FSGet JSON 解析失败: %v, 原始数据: %s", err, string(resp.Data))
 		return nil, err
 	}
 
@@ -467,24 +499,185 @@ func (c *AlistClient) FSGet(ctx context.Context, path string) (*AlistPath, error
 	result.BasePath = c.basePath
 	result.FullPath = path
 
-	c.logger.Debugf("[DEBUG] FSGet 解析后 - RawURL: '%s'", maskURL(result.RawURL))
-
 	return &result, nil
 }
 
-// FSPutFile 文件上传请求中的文件项
+// FSPutFile 文件上传请求中的文件项（兼容保留：Path 为目标文件名，URL 为源直链）
 type FSPutFile struct {
 	Path string `json:"path"`
 	URL  string `json:"url"`
 }
 
+// 离线下载默认工具与删除策略（OpenList v4.2.6: POST /api/fs/add_offline_download）
+const (
+	OfflineToolSimpleHTTP      = "SimpleHttp"
+	OfflineDeleteOnSucceed     = "delete_on_upload_succeed"
+)
+
+// AddOfflineDownload 提交离线下载任务（OpenList v4.2.6 标准接口）
+// dstDir: 目标目录；urls: 源直链列表；tool 为空默认 SimpleHttp
+// 返回首个任务 ID
+func (c *AlistClient) AddOfflineDownload(ctx context.Context, dstDir string, urls []string, tool, deletePolicy string) (string, error) {
+	if len(urls) == 0 {
+		return "", fmt.Errorf("urls 为空")
+	}
+	if tool == "" {
+		tool = OfflineToolSimpleHTTP
+	}
+	if deletePolicy == "" {
+		deletePolicy = OfflineDeleteOnSucceed
+	}
+	req := struct {
+		Path         string   `json:"path"`
+		URLs         []string `json:"urls"`
+		Tool         string   `json:"tool"`
+		DeletePolicy string   `json:"delete_policy"`
+	}{Path: dstDir, URLs: urls, Tool: tool, DeletePolicy: deletePolicy}
+
+	jsonData, _ := json.Marshal(req)
+	resp, err := c.doRequest(ctx, "POST", "/api/fs/add_offline_download", jsonData)
+	if err != nil {
+		return "", err
+	}
+
+	var result struct {
+		Tasks []struct {
+			ID string `json:"id"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return "", fmt.Errorf("解析离线下载任务失败: %w", err)
+	}
+	if len(result.Tasks) == 0 || result.Tasks[0].ID == "" {
+		return "", fmt.Errorf("离线下载未返回任务ID: %s", snippet(resp.Data))
+	}
+	return result.Tasks[0].ID, nil
+}
+
 // TaskInfoData 任务状态信息
+// OpenList v4 info 接口返回 data 数组首元素；state 以字符串为主（succeeded/failed/canceled + running），兼容数字形态
 type TaskInfoData struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
-	State    string `json:"state"` // succeeded, failed, canceled, running
+	State    string `json:"state"`
 	Status   string `json:"status"`
 	Progress int    `json:"progress"`
+	Error    string `json:"error"`
+}
+
+// UnmarshalJSON 兼容 state 为 string 或 number 两种形态
+func (t *TaskInfoData) UnmarshalJSON(data []byte) error {
+	type alias TaskInfoData
+	var raw struct {
+		alias
+		StateRaw json.RawMessage `json:"state"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*t = TaskInfoData(raw.alias)
+	if len(raw.StateRaw) == 0 || string(raw.StateRaw) == "null" {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(raw.StateRaw, &s); err == nil {
+		t.State = s
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(raw.StateRaw, &n); err == nil {
+		t.State = n.String()
+		return nil
+	}
+	return nil
+}
+
+// taskAction 按任务类型调 per-type 端点（OpenList v4 声明）
+// taskType: offline_download（离线下载，本同步场景）/ upload；action: info/cancel/retry
+func (c *AlistClient) taskAction(ctx context.Context, taskType, action, taskID string) (*APIResponse, error) {
+	endpoint := fmt.Sprintf("/api/admin/task/%s/%s?tid=%s", taskType, action, url.QueryEscape(taskID))
+	return c.doRequest(ctx, "POST", endpoint, []byte("{}"))
+}
+
+// TaskInfo 查询异步任务状态（优先 offline_download，兼容 upload）
+// 声明返回 data 数组，取首元素；老端点做最终回退
+func (c *AlistClient) TaskInfo(ctx context.Context, taskID string) (*TaskInfoData, error) {
+	var lastErr error
+	for _, taskType := range []string{"offline_download", "upload"} {
+		resp, err := c.taskAction(ctx, taskType, "info", taskID)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		info, err := parseTaskInfo(resp.Data)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return info, nil
+	}
+	// 回退老端点（兼容旧版本）
+	resp, err := c.doRequest(ctx, "POST", "/api/admin/task/task_info", []byte(`{"id":"`+taskID+`"}`))
+	if err != nil {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, err
+	}
+	return parseTaskInfo(resp.Data)
+}
+
+func parseTaskInfo(data json.RawMessage) (*TaskInfoData, error) {
+	// 先按数组解析（v4 声明形态）
+	var arr []TaskInfoData
+	if err := json.Unmarshal(data, &arr); err == nil && len(arr) > 0 {
+		return &arr[0], nil
+	}
+	var single TaskInfoData
+	if err := json.Unmarshal(data, &single); err != nil {
+		return nil, fmt.Errorf("解析任务信息失败: %w", err)
+	}
+	return &single, nil
+}
+
+// TaskCancel 取消异步任务（per-type 端点 + 老端点回退）
+func (c *AlistClient) TaskCancel(ctx context.Context, taskID string) error {
+	var lastErr error
+	for _, taskType := range []string{"offline_download", "upload"} {
+		if _, err := c.taskAction(ctx, taskType, "cancel", taskID); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	_, err := c.doRequest(ctx, "POST", "/api/admin/task/cancel", []byte(`{"id":"`+taskID+`"}`))
+	if err != nil {
+		if lastErr != nil {
+			return lastErr
+		}
+		return err
+	}
+	return nil
+}
+
+// TaskRetry 重试失败的异步任务（per-type 端点 + 老端点回退）
+func (c *AlistClient) TaskRetry(ctx context.Context, taskID string) error {
+	var lastErr error
+	for _, taskType := range []string{"offline_download", "upload"} {
+		if _, err := c.taskAction(ctx, taskType, "retry", taskID); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	_, err := c.doRequest(ctx, "POST", "/api/admin/task/retry", []byte(`{"id":"`+taskID+`"}`))
+	if err != nil {
+		if lastErr != nil {
+			return lastErr
+		}
+		return err
+	}
+	return nil
 }
 
 // FSMkdir 创建目录（类似 mkdir -p，可递归创建）
@@ -529,64 +722,23 @@ func (c *AlistClient) FSRename(ctx context.Context, path, name string) error {
 	return err
 }
 
-// FSPut 提交异步文件上传任务
-// dstPath: 目标目录路径
-// files: 要上传的文件列表（path=文件名, url=源文件直链）
-// 返回值: alist_task_id（异步任务ID）
+// FSPut 提交 URL 落盘任务
+// 注意：OpenList v4.2.6 的 PUT /api/fs/put 是流式上传（header File-Path + 二进制 body），
+// 而 URL 落盘（本同步场景）标准接口是 POST /api/fs/add_offline_download。
+// 此处保持旧签名兼容：逐个 URL 提交离线下载，返回首个任务 ID。
+// dstPath: 目标目录路径；files: 文件列表（Path=目标文件名保留语义，URL=源直链）
 func (c *AlistClient) FSPut(ctx context.Context, dstPath string, files []FSPutFile) (string, error) {
-	req := struct {
-		Path  string      `json:"path"`
-		Files []FSPutFile `json:"files"`
-	}{
-		Path:  dstPath,
-		Files: files,
+	if len(files) == 0 {
+		return "", fmt.Errorf("files 为空")
 	}
-
-	jsonData, _ := json.Marshal(req)
-	resp, err := c.doRequest(ctx, "POST", "/api/fs/put", jsonData)
-	if err != nil {
-		return "", err
+	urls := make([]string, 0, len(files))
+	for _, f := range files {
+		if f.URL == "" {
+			return "", fmt.Errorf("文件 %s 缺少源 URL", f.Path)
+		}
+		urls = append(urls, f.URL)
 	}
-
-	var result struct {
-		TaskID string `json:"task_id"`
-	}
-	if err := json.Unmarshal(resp.Data, &result); err != nil {
-		return "", fmt.Errorf("解析任务ID失败: %w", err)
-	}
-	return result.TaskID, nil
-}
-
-// TaskInfo 查询异步任务状态
-func (c *AlistClient) TaskInfo(ctx context.Context, taskID string) (*TaskInfoData, error) {
-	req := map[string]string{"id": taskID}
-	jsonData, _ := json.Marshal(req)
-	resp, err := c.doRequest(ctx, "POST", "/api/admin/task/task_info", jsonData)
-	if err != nil {
-		return nil, err
-	}
-
-	var result TaskInfoData
-	if err := json.Unmarshal(resp.Data, &result); err != nil {
-		return nil, fmt.Errorf("解析任务信息失败: %w", err)
-	}
-	return &result, nil
-}
-
-// TaskCancel 取消异步任务
-func (c *AlistClient) TaskCancel(ctx context.Context, taskID string) error {
-	req := map[string]string{"id": taskID}
-	jsonData, _ := json.Marshal(req)
-	_, err := c.doRequest(ctx, "POST", "/api/admin/task/cancel", jsonData)
-	return err
-}
-
-// TaskRetry 重试失败的异步任务
-func (c *AlistClient) TaskRetry(ctx context.Context, taskID string) error {
-	req := map[string]string{"id": taskID}
-	jsonData, _ := json.Marshal(req)
-	_, err := c.doRequest(ctx, "POST", "/api/admin/task/retry", jsonData)
-	return err
+	return c.AddOfflineDownload(ctx, dstPath, urls, OfflineToolSimpleHTTP, OfflineDeleteOnSucceed)
 }
 
 // AdminStorageList 列出存储列表（需要管理员权限）
@@ -729,6 +881,17 @@ func startsWith(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
 
+// joinPath 拼接目录与文件名，避免双斜杠
+func joinPath(dir, name string) string {
+	if dir == "" {
+		return "/" + name
+	}
+	if strings.HasSuffix(dir, "/") {
+		return dir + name
+	}
+	return dir + "/" + name
+}
+
 func trimRight(s, cutset string) string {
 	for len(s) > 0 && s[len(s)-1:] == cutset {
 		s = s[:len(s)-1]
@@ -744,4 +907,22 @@ func maskURL(url string) string {
 		return url[:50] + "..."
 	}
 	return url
+}
+
+// snippet 截取响应体摘要用于错误诊断（避免刷屏，最多 500 字节）
+func snippet(body []byte) string {
+	const max = 500
+	if len(body) <= max {
+		return string(body)
+	}
+	return string(body[:max]) + "...(truncated)"
+}
+
+// IsNotFound 判断是否为“对象不存在”类错误
+// OpenList v4 对不存在路径返回 code!=200 且 message 含 object not found
+func IsNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "object not found")
 }
