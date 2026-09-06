@@ -37,7 +37,12 @@ const props = defineProps({
 })
 defineEmits(['run', 'toggle'])
 
-const nextRun = computed(() => props.module.next_run ? new Date(props.module.next_run) : null)
+const nextRun = computed(() => {
+  const v = props.module.next_run
+  // 后端零时间（禁用/表达式非法）序列化为 0001-01-01，直接隐藏而非显示 1/1/1
+  if (!v || v.startsWith('0001-01-01')) return null
+  return new Date(v)
+})
 const lastRun = computed(() => {
   const value = props.module.last_run
   if (!value || value.startsWith('0001-01-01')) return null
