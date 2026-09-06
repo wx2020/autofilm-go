@@ -105,6 +105,13 @@ func init() {
 	}
 }
 
+// GetLogHook 返回 WebSocket 日志钩子。
+// 调用方必须在 core.InitLogger() 之后挂载（InitLogger 会重建 logger 实例，
+// 此前挂载的钩子会丢失），否则 /api/logs/stream 永远收不到日志。
+func GetLogHook() *LogHook {
+	return globalLogHook
+}
+
 // SubscribeLogs 订阅日志流
 func SubscribeLogs() chan string {
 	ch := make(chan string, 64)

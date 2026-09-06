@@ -161,6 +161,9 @@ func main() {
 	// SQLite 设置加载完成后初始化日志，使调试模式立即生效。
 	core.InitLogger()
 	logger = core.GetLogger()
+	// 接通日志到 WebSocket 直播的钩子：InitLogger 重建了 logger 实例，
+	// 必须在此之后挂载，否则 /api/logs/stream 永远收不到日志。
+	core.AddLogHook(web.GetLogHook())
 	logger.Infof("AutoFilm %s 启动中...", core.AppVersion())
 	logger.Debugf("是否开启DEBUG模式: %v", settings.IsDebug())
 	if dbStore != nil {
