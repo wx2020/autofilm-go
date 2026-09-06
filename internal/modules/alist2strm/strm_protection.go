@@ -2,6 +2,7 @@ package alist2strm
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -42,6 +43,17 @@ func NewStrmProtectionManager(targetDir, taskID string, threshold, graceScans in
 	}
 }
 
+// 日志 helper：自动带任务 ID 前缀（内部用局部变量，避免批量替换误伤）
+func (spm *StrmProtectionManager) infof(format string, args ...interface{}) {
+	l := spm.logger
+	l.Infof("[%s] %s", spm.taskID, fmt.Sprintf(format, args...))
+}
+
+func (spm *StrmProtectionManager) warnf(format string, args ...interface{}) {
+	l := spm.logger
+	l.Warnf("[%s] %s", spm.taskID, fmt.Sprintf(format, args...))
+}
+
 // Load 加载保护状态
 func (spm *StrmProtectionManager) Load() error {
 	spm.mu.Lock()
@@ -57,7 +69,7 @@ func (spm *StrmProtectionManager) Load() error {
 
 	var state ProtectionState
 	if err := json.Unmarshal(data, &state); err != nil {
-		spm.logger.Warnf("加载保护状态失败: %v，重新开始", err)
+		spm.warnf("加载保护状态失败: %v，重新开始", err)
 		return nil
 	}
 
@@ -105,17 +117,17 @@ func (spm *StrmProtectionManager) Process(strmToDelete, strmPresent map[string]s
 	}
 
 	if returned > 0 {
-		spm.logger.Infof("%d 个.strm文件已恢复，取消保护", returned)
+		spm.infof("%d 个.strm文件已恢复，取消保护", returned)
 	}
 
 	if len(strmToDelete) < spm.threshold {
 		if len(strmToDelete) > 0 {
-			spm.logger.Infof("正常删除 %d 个.strm（阈值：%d）", len(strmToDelete), spm.threshold)
+			spm.infof("正常删除 %d 个.strm（阈值：%d）", len(strmToDelete), spm.threshold)
 		}
 		return strmToDelete
 	}
 
-	spm.logger.Warnf("保护激活：%d 个.strm待删除（阈值：%d）", len(strmToDelete), spm.threshold)
+	spm.warnf("保护激活：%d 个.strm待删除（阈值：%d）", len(strmToDelete), spm.threshold)
 
 	// 增加保护计数
 	for filePath := range strmToDelete {
@@ -135,11 +147,11 @@ func (spm *StrmProtectionManager) Process(strmToDelete, strmPresent map[string]s
 	pending := len(spm.protected)
 
 	if len(readyRel) > 0 {
-		spm.logger.Warnf("删除 %d 个.strm（经过 %d 次扫描确认）", len(readyRel), spm.graceScans)
+		spm.warnf("删除 %d 个.strm（经过 %d 次扫描确认）", len(readyRel), spm.graceScans)
 	}
 
 	if pending > 0 {
-		spm.logger.Infof("%d 个文件等待确认", pending)
+		spm.infof("%d 个文件等待确认", pending)
 	}
 
 	// 转换回绝对路径
