@@ -150,6 +150,20 @@ func (m *FileMover) infof(format string, args ...interface{}) {
 	m.logger.Infof("[%s] %s", m.config.ID, fmt.Sprintf(format, args...))
 }
 
+func (m *FileMover) warnf(format string, args ...interface{}) {
+	if m.logger == nil {
+		return
+	}
+	m.logger.Warnf("[%s] %s", m.config.ID, fmt.Sprintf(format, args...))
+}
+
+func (m *FileMover) debugf(format string, args ...interface{}) {
+	if m.logger == nil {
+		return
+	}
+	m.logger.Debugf("[%s] %s", m.config.ID, fmt.Sprintf(format, args...))
+}
+
 // New validates a file move configuration and creates a mover.
 func New(cfg *Config) (*FileMover, error) {
 	if cfg == nil {
@@ -360,9 +374,12 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 	var report MoveReport
 	sourceDir := cleanRemotePath(m.config.SourceDir)
 	targetDir := cleanRemotePath(m.config.TargetDir)
-	files, err := listOpenListRecursive(ctx, m.client, sourceDir)
+	files, failedDirs, err := listOpenListRecursive(ctx, m.client, sourceDir)
 	if err != nil {
 		return report, fmt.Errorf("列出 OpenList source_dir 失败: %w", err)
+	}
+	if len(failedDirs) > 0 {
+		m.warnf("源目录遍历部分完成：%d 个异常子树已跳过: %v", len(failedDirs), failedDirs)
 	}
 	matchedDirs := map[string]int{}
 	movedDirs := map[string]int{}
@@ -379,7 +396,8 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			newName := m.rename.ReplaceAllString(file.Name, m.config.RenameReplacement)
 			if newName != "" && newName != file.Name {
 				newPath := joinRemotePath(pathDir(file.FullPath), newName)
-				if existing, err := m.client.FSGet(ctx, newPath); err == nil && existing != nil {
+				// P1：存在性探测免重试——失败即按不存在处理，重试只是烧时间
+				if existing, err := m.client.FSGetNoRetry(ctx, newPath); err == nil && existing != nil {
 					if !m.config.Overwrite {
 						report.Skipped++
 						continue
@@ -407,7 +425,8 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			destinationRel = pathBase(rel)
 		}
 		destination := joinRemotePath(targetDir, destinationRel)
-		if existing, err := m.client.FSGet(ctx, destination); err == nil && existing != nil {
+		// P1：存在性探测免重试——失败即按不存在处理，重试只是烧时间
+		if existing, err := m.client.FSGetNoRetry(ctx, destination); err == nil && existing != nil {
 			if !m.config.Overwrite {
 				report.Skipped++
 				continue
@@ -423,6 +442,14 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			continue
 		}
 		if err := m.client.FSMove(ctx, pathDir(file.FullPath), pathDir(destination), []string{pathBase(file.FullPath)}); err != nil {
+			// P0 二次确认：源文件可能已被外部搬走（缓存列表过期影子），
+			// 新鲜探测一次（免重试）：源已消失则记跳过，不计错误、不重试；
+			// 源还在才是真失败，走正常错误上报（doRequest 层已有退避）。
+			if _, gerr := m.client.FSGetNoRetry(ctx, file.FullPath); gerr != nil && alist.IsNotFound(gerr) {
+				m.debugf("源文件已消失，跳过: %s", file.FullPath)
+				report.Skipped++
+				continue
+			}
 			report.Errors = append(report.Errors, fmt.Errorf("移动 %s 到 %s 失败: %w", file.FullPath, destination, err))
 			continue
 		}
@@ -487,17 +514,34 @@ func (m *FileMover) removeMatchedOpenListDirs(ctx context.Context, sourceDir str
 	return removed, nil
 }
 
-func listOpenListRecursive(ctx context.Context, client *alist.AlistClient, dir string) ([]alist.AlistPath, error) {
+// listOpenListRecursive 递归列出文件（P0：与增量扫描 R1 同款容错）。
+// 子目录失败只跳过该子树并记入 failed 返回，继续兄弟目录；
+// 仅根目录本身失败或 ctx 取消才返回 error。
+func listOpenListRecursive(ctx context.Context, client *alist.AlistClient, dir string) (files []alist.AlistPath, failed []string, err error) {
 	var result []alist.AlistPath
-	var walk func(string) error
-	walk = func(path string) error {
+	var failedDirs []string
+	var walk func(path string, depth int) error
+	walk = func(path string, depth int) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		entries, err := client.FSListLight(ctx, path)
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if depth == 0 {
+				return fmt.Errorf("FSList %s: %w", path, err)
+			}
+			failedDirs = append(failedDirs, path)
+			return nil
 		}
 		for _, entry := range entries {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if entry.IsDir() {
-				if err := walk(entry.FullPath); err != nil {
+				if err := walk(entry.FullPath, depth+1); err != nil {
 					return err
 				}
 			} else {
@@ -506,7 +550,10 @@ func listOpenListRecursive(ctx context.Context, client *alist.AlistClient, dir s
 		}
 		return nil
 	}
-	return result, walk(dir)
+	if err := walk(dir, 0); err != nil {
+		return nil, nil, err
+	}
+	return result, failedDirs, nil
 }
 
 func cleanRemotePath(path string) string {

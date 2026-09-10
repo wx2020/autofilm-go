@@ -92,15 +92,25 @@ func recordRunFinish(moduleType string, failed bool) {
 }
 
 func metricsSnapshot() map[string]interface{} {
-	metricsState.mu.RLock()
-	defer metricsState.mu.RUnlock()
-	runs := map[string]uint64{}
-	failures := map[string]uint64{}
-	for k, v := range metricsState.Runs {
-		runs[k] = v
+	// 累计执行/累计失败读数据库（重启不丢失）；库不可用时回退内存计数。
+	// 运行中/运行时长本就是实时状态，保持内存/进程值。
+	var runs, failures map[string]uint64
+	if store := storage.GlobalStore(); store != nil {
+		if r, f, err := store.CountTaskRuns(); err == nil {
+			runs, failures = r, f
+		}
 	}
-	for k, v := range metricsState.Failures {
-		failures[k] = v
+	if runs == nil {
+		metricsState.mu.RLock()
+		runs = map[string]uint64{}
+		failures = map[string]uint64{}
+		for k, v := range metricsState.Runs {
+			runs[k] = v
+		}
+		for k, v := range metricsState.Failures {
+			failures[k] = v
+		}
+		metricsState.mu.RUnlock()
 	}
 	return map[string]interface{}{
 		"started_at":     metricsState.StartedAt,

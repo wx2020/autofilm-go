@@ -247,3 +247,13 @@ func (s *Server) handleAcknowledgeAlert(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
+
+// handleAcknowledgeAllAlerts POST /api/alerts/ack-all 一键确认全部未确认告警
+func (s *Server) handleAcknowledgeAllAlerts(w http.ResponseWriter, _ *http.Request) {
+	n, err := storage.GlobalStore().AcknowledgeAllAlerts()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "acknowledged": n})
+}

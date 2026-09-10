@@ -160,6 +160,12 @@ func main() {
 
 	dbStore = storage.NewStore(database, key)
 	storage.SetGlobalStore(dbStore)
+	// 收敛上次退出时残留的 running 记录（运行中状态只活在内存，重启后不再有效）
+	if n, err := dbStore.MarkInterruptedTaskRuns(); err != nil {
+		fmt.Printf("收敛中断的运行记录失败: %v\n", err)
+	} else if n > 0 {
+		fmt.Printf("已将 %d 条中断的运行记录标记为 interrupted\n", n)
+	}
 	if err := dbStore.MigrateModuleType("alissync", "alistsync"); err != nil {
 		fmt.Printf("模块类型迁移失败: %v\n", err)
 		os.Exit(1)
