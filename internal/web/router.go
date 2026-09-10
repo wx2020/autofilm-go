@@ -1,7 +1,10 @@
 package web
 
 import (
+	"bufio"
+	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -90,6 +93,22 @@ type captureResponseWriter struct {
 func (w *captureResponseWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack 透传劫持能力：缺少它时 gorilla/websocket 无法升级连接，
+// /api/logs/stream 会恒返回 500（websocket: response does not implement http.Hijacker）
+func (w *captureResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := w.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, fmt.Errorf("底层 writer 不支持 hijack")
+}
+
+// Flush 透传刷新，避免需要流式写入的 handler 被缓冲卡住
+func (w *captureResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // requestLogger 轻量访问日志：只记录 method/path/status/耗时，

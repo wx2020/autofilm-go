@@ -21,12 +21,18 @@ var (
 // HTTPClient HTTP客户端
 type HTTPClient struct {
 	client     *http.Client
+	longClient *http.Client // 超长超时通道（写操作专用，见 LongTimeout）
 	timeout    time.Duration
 	userAgent  string
 	logger     *logrus.Logger
 	maxRetries int
 	retryDelay time.Duration
 }
+
+// LongTimeout 写操作（move/mkdir/remove/rename）超长超时。
+// 实测 115 冷驱动 mkdir 即达 ~10s，GB 级 move 远超读接口的 10s 上限，
+// 客户端掐线而服务端随后做完是 EOF 雪崩的主因之一。
+const LongTimeout = 300 * time.Second
 
 // Config HTTP客户端配置
 type Config struct {
@@ -76,14 +82,19 @@ func GetClient(config ...*Config) *HTTPClient {
 			})
 		}
 
+		transport := &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		}
 		globalClient = &HTTPClient{
 			client: &http.Client{
-				Timeout: cfg.Timeout,
-				Transport: &http.Transport{
-					MaxIdleConns:        100,
-					MaxIdleConnsPerHost: 10,
-					IdleConnTimeout:     90 * time.Second,
-				},
+				Timeout:   cfg.Timeout,
+				Transport: transport,
+			},
+			longClient: &http.Client{
+				Timeout:   LongTimeout,
+				Transport: transport,
 			},
 			timeout:    cfg.Timeout,
 			userAgent:  cfg.UserAgent,
@@ -102,8 +113,17 @@ type Response struct {
 	Body       []byte
 }
 
-// Request 发送HTTP请求
+// Request 发送HTTP请求（读接口：10s 超时快失败）
 func (c *HTTPClient) Request(ctx context.Context, method, url string, headers map[string]string, body io.Reader) (*Response, error) {
+	return c.requestWithClient(ctx, c.client, method, url, headers, body)
+}
+
+// RequestLong 发送HTTP请求（写操作超长通道：300s，见 LongTimeout）
+func (c *HTTPClient) RequestLong(ctx context.Context, method, url string, headers map[string]string, body io.Reader) (*Response, error) {
+	return c.requestWithClient(ctx, c.longClient, method, url, headers, body)
+}
+
+func (c *HTTPClient) requestWithClient(ctx context.Context, hc *http.Client, method, url string, headers map[string]string, body io.Reader) (*Response, error) {
 	var lastErr error
 
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
@@ -130,7 +150,7 @@ func (c *HTTPClient) Request(ctx context.Context, method, url string, headers ma
 			req.Header.Set(k, v)
 		}
 
-		resp, err := c.client.Do(req)
+		resp, err := hc.Do(req)
 		if err != nil {
 			lastErr = err
 			c.logger.Debugf("请求失败 %s: %v", url, err)
@@ -168,6 +188,15 @@ func (c *HTTPClient) Post(ctx context.Context, url string, headers map[string]st
 		bodyReader = bytes.NewReader(body)
 	}
 	return c.Request(ctx, http.MethodPost, url, headers, bodyReader)
+}
+
+// PostLong 发送POST请求（写操作超长通道：300s，见 LongTimeout）
+func (c *HTTPClient) PostLong(ctx context.Context, url string, headers map[string]string, body []byte) (*Response, error) {
+	var bodyReader io.Reader
+	if body != nil {
+		bodyReader = bytes.NewReader(body)
+	}
+	return c.RequestLong(ctx, http.MethodPost, url, headers, bodyReader)
 }
 
 // Put 发送PUT请求

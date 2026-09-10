@@ -396,8 +396,13 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			newName := m.rename.ReplaceAllString(file.Name, m.config.RenameReplacement)
 			if newName != "" && newName != file.Name {
 				newPath := joinRemotePath(pathDir(file.FullPath), newName)
-				// P1：存在性探测免重试——失败即按不存在处理，重试只是烧时间
-				if existing, err := m.client.FSGetNoRetry(ctx, newPath); err == nil && existing != nil {
+				// P1：存在性探测免重试。三段论：存在→走覆盖逻辑；不存在→继续；
+				// 其他错误（EOF/限流等）= 未知，不放行（今晚实测：探测 EOF 被当不存在，
+				// 直接 move 白白失败；未知必须停下记错）。
+				if existing, perr := m.client.FSGetNoRetry(ctx, newPath); perr != nil && !alist.IsNotFound(perr) {
+					report.Errors = append(report.Errors, fmt.Errorf("探测重命名目标 %s 失败（未知状态，已跳过）: %w", newPath, perr))
+					continue
+				} else if existing != nil {
 					if !m.config.Overwrite {
 						report.Skipped++
 						continue
@@ -425,8 +430,12 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			destinationRel = pathBase(rel)
 		}
 		destination := joinRemotePath(targetDir, destinationRel)
-		// P1：存在性探测免重试——失败即按不存在处理，重试只是烧时间
-		if existing, err := m.client.FSGetNoRetry(ctx, destination); err == nil && existing != nil {
+		// P1：存在性探测免重试。三段论：存在→走覆盖逻辑；不存在→继续搬；
+		// 其他错误（EOF/限流等）= 未知，记错跳过，绝不盲 move。
+		if existing, perr := m.client.FSGetNoRetry(ctx, destination); perr != nil && !alist.IsNotFound(perr) {
+			report.Errors = append(report.Errors, fmt.Errorf("探测目标 %s 失败（未知状态，已跳过）: %w", destination, perr))
+			continue
+		} else if existing != nil {
 			if !m.config.Overwrite {
 				report.Skipped++
 				continue
@@ -448,6 +457,14 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			if _, gerr := m.client.FSGetNoRetry(ctx, file.FullPath); gerr != nil && alist.IsNotFound(gerr) {
 				m.debugf("源文件已消失，跳过: %s", file.FullPath)
 				report.Skipped++
+				continue
+			}
+			// 歧义失败（EOF/超时/限流等非确定性错误）：服务端可能已搬完，
+			// 验目标定性——目标存在且大小一致则计成功，避免下轮重复搬运。
+			if !alist.IsNotFound(err) && m.verifyMoveSucceeded(ctx, destination, file.Size) {
+				m.infof("移动 %s 实已成功（目标校验通过，move 接口返回 %v）", file.FullPath, err)
+				report.Moved++
+				movedDirs[pathDir(file.FullPath)]++
 				continue
 			}
 			report.Errors = append(report.Errors, fmt.Errorf("移动 %s 到 %s 失败: %w", file.FullPath, destination, err))
@@ -512,6 +529,20 @@ func (m *FileMover) removeMatchedOpenListDirs(ctx context.Context, sourceDir str
 		removed++
 	}
 	return removed, nil
+}
+
+// verifyMoveSucceeded move 报歧义错误后验目标定性（免重试单次探测）。
+// 目标存在且大小一致（size<=0 时只判存在）即视为搬运成功。
+func (m *FileMover) verifyMoveSucceeded(ctx context.Context, destination string, wantSize int64) bool {
+	existing, err := m.client.FSGetNoRetry(ctx, destination)
+	if err != nil || existing == nil {
+		return false
+	}
+	if wantSize > 0 && existing.Size != wantSize {
+		m.debugf("目标 %s 大小不一致（want=%d got=%d），判为未成功", destination, wantSize, existing.Size)
+		return false
+	}
+	return true
 }
 
 // listOpenListRecursive 递归列出文件（P0：与增量扫描 R1 同款容错）。
