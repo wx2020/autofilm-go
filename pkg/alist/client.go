@@ -356,16 +356,22 @@ func (c *AlistClient) doRequest(ctx context.Context, method, endpoint string, js
 // 避免瞬时抖动直接上抛，进而触发整树回退全量。
 // 存在性探测等“失败即按不存在处理”的调用请用 doRequestNoRetry，免去退避等待。
 func (c *AlistClient) doRequestWithHeaders(ctx context.Context, method, endpoint string, jsonData []byte, extraHeaders map[string]string) (*APIResponse, error) {
-	return c.doRequestInternal(ctx, method, endpoint, jsonData, extraHeaders, true)
+	return c.doRequestInternal(ctx, method, endpoint, jsonData, extraHeaders, true, false)
+}
+
+// doRequestLong 写操作通道：超长超时（httpclient.LongTimeout）+ 保留退避重试。
+// 用于 mkdir/remove/move/rename——115 冷驱动下 GB 级 move 远超读接口 10s 上限。
+func (c *AlistClient) doRequestLong(ctx context.Context, method, endpoint string, jsonData []byte) (*APIResponse, error) {
+	return c.doRequestInternal(ctx, method, endpoint, jsonData, nil, true, true)
 }
 
 // doRequestNoRetry 单次请求（无 HTTP/API 层退避重试）。
 // 401 刷新保留一次（鉴权正确性，非瞬时重试）：无有效令牌时探测本身无意义。
 func (c *AlistClient) doRequestNoRetry(ctx context.Context, method, endpoint string, jsonData []byte) (*APIResponse, error) {
-	return c.doRequestInternal(ctx, method, endpoint, jsonData, nil, false)
+	return c.doRequestInternal(ctx, method, endpoint, jsonData, nil, false, false)
 }
 
-func (c *AlistClient) doRequestInternal(ctx context.Context, method, endpoint string, jsonData []byte, extraHeaders map[string]string, retry bool) (*APIResponse, error) {
+func (c *AlistClient) doRequestInternal(ctx context.Context, method, endpoint string, jsonData []byte, extraHeaders map[string]string, retry, long bool) (*APIResponse, error) {
 	// 原子读取一次，避免读取过程中被其他协程替换导致不一致
 	if lim := c.rateLimiter.Load(); lim != nil {
 		if err := lim.Wait(ctx); err != nil {
@@ -389,7 +395,11 @@ func (c *AlistClient) doRequestInternal(ctx context.Context, method, endpoint st
 		case "GET":
 			resp, err = c.httpClient.Get(ctx, url, headers)
 		case "POST":
-			resp, err = c.httpClient.Post(ctx, url, headers, jsonData)
+			if long {
+				resp, err = c.httpClient.PostLong(ctx, url, headers, jsonData)
+			} else {
+				resp, err = c.httpClient.Post(ctx, url, headers, jsonData)
+			}
 		case "PUT":
 			resp, err = c.httpClient.Put(ctx, url, headers, jsonData)
 		default:
@@ -840,11 +850,15 @@ func (c *AlistClient) TaskRetry(ctx context.Context, taskID string) error {
 	return nil
 }
 
+// 以下写操作走超长超时通道（doRequestLong，300s）：
+// 115 冷驱动下 mkdir 实测 ~10s、GB 级 move 远超读接口 10s 上限，
+// 客户端掐线而服务端随后做完是 EOF 歧义失败的主因。读接口保持 10s 快失败。
+
 // FSMkdir 创建目录（类似 mkdir -p，可递归创建）
 func (c *AlistClient) FSMkdir(ctx context.Context, dirPath string) error {
 	req := map[string]string{"path": dirPath}
 	jsonData, _ := json.Marshal(req)
-	_, err := c.doRequest(ctx, "POST", "/api/fs/mkdir", jsonData)
+	_, err := c.doRequestLong(ctx, "POST", "/api/fs/mkdir", jsonData)
 	return err
 }
 
@@ -855,7 +869,7 @@ func (c *AlistClient) FSRemove(ctx context.Context, dirPath string, names []stri
 		Names []string `json:"names"`
 	}{Dir: dirPath, Names: names}
 	jsonData, _ := json.Marshal(req)
-	_, err := c.doRequest(ctx, "POST", "/api/fs/remove", jsonData)
+	_, err := c.doRequestLong(ctx, "POST", "/api/fs/remove", jsonData)
 	return err
 }
 
@@ -867,7 +881,7 @@ func (c *AlistClient) FSMove(ctx context.Context, srcDir, dstDir string, names [
 		Names  []string `json:"names"`
 	}{SrcDir: srcDir, DstDir: dstDir, Names: names}
 	jsonData, _ := json.Marshal(req)
-	_, err := c.doRequest(ctx, "POST", "/api/fs/move", jsonData)
+	_, err := c.doRequestLong(ctx, "POST", "/api/fs/move", jsonData)
 	return err
 }
 
@@ -878,7 +892,7 @@ func (c *AlistClient) FSRename(ctx context.Context, path, name string) error {
 		Name string `json:"name"`
 	}{Path: path, Name: name}
 	jsonData, _ := json.Marshal(req)
-	_, err := c.doRequest(ctx, "POST", "/api/fs/rename", jsonData)
+	_, err := c.doRequestLong(ctx, "POST", "/api/fs/rename", jsonData)
 	return err
 }
 
