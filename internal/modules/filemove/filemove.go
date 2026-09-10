@@ -14,7 +14,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/akimio/autofilm/internal/core"
 	"github.com/akimio/autofilm/pkg/alist"
+	"github.com/sirupsen/logrus"
 )
 
 // Config describes one recursive local file move task.
@@ -49,37 +51,37 @@ type Config struct {
 // Units use binary multiples: 1KB=1024 bytes.
 func ParseSize(value interface{}) (int64, error) {
 	if value == nil {
-		return 0, errors.New("size is empty")
+		return 0, errors.New("size 为空")
 	}
 	if number, ok := value.(float64); ok {
 		if number < 0 || math.IsNaN(number) || math.IsInf(number, 0) || number != math.Trunc(number) || number >= 9223372036854775808 {
-			return 0, fmt.Errorf("invalid numeric size %v", number)
+			return 0, fmt.Errorf("无效的数字大小 %v", number)
 		}
 		return int64(number), nil
 	}
 	if number, ok := value.(int64); ok {
 		if number < 0 {
-			return 0, fmt.Errorf("invalid numeric size %d", number)
+			return 0, fmt.Errorf("无效的数字大小 %d", number)
 		}
 		return number, nil
 	}
 	if number, ok := value.(int); ok {
 		if number < 0 {
-			return 0, fmt.Errorf("invalid numeric size %d", number)
+			return 0, fmt.Errorf("无效的数字大小 %d", number)
 		}
 		return int64(number), nil
 	}
 	text := strings.ToUpper(strings.TrimSpace(fmt.Sprint(value)))
 	if text == "" {
-		return 0, errors.New("size is empty")
+		return 0, errors.New("size 为空")
 	}
 	match := regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB)?$`).FindStringSubmatch(text)
 	if match == nil {
-		return 0, fmt.Errorf("invalid size %q; use bytes or B/KB/MB/GB/TB", text)
+		return 0, fmt.Errorf("无效的大小 %q；请使用字节数或 B/KB/MB/GB/TB", text)
 	}
 	number, err := strconv.ParseFloat(match[1], 64)
 	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
-		return 0, fmt.Errorf("invalid size %q", text)
+		return 0, fmt.Errorf("无效的大小 %q", text)
 	}
 	multiplier := float64(1)
 	switch match[2] {
@@ -94,7 +96,7 @@ func ParseSize(value interface{}) (int64, error) {
 	}
 	bytes := number * multiplier
 	if bytes < 0 || bytes != math.Trunc(bytes) || bytes >= 9223372036854775808 {
-		return 0, fmt.Errorf("size %q is outside the supported byte range", text)
+		return 0, fmt.Errorf("大小 %q 超出支持的字节范围", text)
 	}
 	return int64(bytes), nil
 }
@@ -110,9 +112,23 @@ type MoveReport struct {
 	Errors      []error
 }
 
-// Error returns all per-file errors as one error.
+// Error returns all per-file errors as one single-line error.
+// 错误间用分号连接（而非 errors.Join 的换行），保证一条日志只占一行，
+// 日志级别过滤与按行展示不会把续行漏掉或拆散。
 func (r MoveReport) Error() error {
-	return errors.Join(r.Errors...)
+	if len(r.Errors) == 0 {
+		return nil
+	}
+	msgs := make([]string, 0, len(r.Errors))
+	for _, err := range r.Errors {
+		if err != nil {
+			msgs = append(msgs, err.Error())
+		}
+	}
+	if len(msgs) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(msgs, "; "))
 }
 
 // FileMover recursively moves files matching its configuration.
@@ -123,59 +139,68 @@ type FileMover struct {
 	pattern   *regexp.Regexp
 	rename    *regexp.Regexp
 	client    *alist.AlistClient
+	logger    *logrus.Logger
+}
+
+// infof 与 alist2strm 对齐：所有日志自动带任务 ID 前缀
+func (m *FileMover) infof(format string, args ...interface{}) {
+	if m.logger == nil {
+		return
+	}
+	m.logger.Infof("[%s] %s", m.config.ID, fmt.Sprintf(format, args...))
 }
 
 // New validates a file move configuration and creates a mover.
 func New(cfg *Config) (*FileMover, error) {
 	if cfg == nil {
-		return nil, errors.New("filemove config is nil")
+		return nil, errors.New("filemove 配置为空")
 	}
 	backend := strings.ToLower(strings.TrimSpace(cfg.Backend))
 	if backend == "" {
 		backend = "local"
 	}
 	if backend != "local" && backend != "openlist" {
-		return nil, fmt.Errorf("unsupported filemove backend: %s", cfg.Backend)
+		return nil, fmt.Errorf("不支持的 filemove 后端: %s", cfg.Backend)
 	}
 	if strings.TrimSpace(cfg.SourceDir) == "" {
-		return nil, errors.New("source_dir cannot be empty")
+		return nil, errors.New("source_dir 不能为空")
 	}
 	if strings.TrimSpace(cfg.TargetDir) == "" {
-		return nil, errors.New("target_dir cannot be empty")
+		return nil, errors.New("target_dir 不能为空")
 	}
 	if cfg.Size != nil && *cfg.Size < 0 {
-		return nil, errors.New("size cannot be negative")
+		return nil, errors.New("size 不能为负数")
 	}
 	if cfg.MinSize < 0 || cfg.MaxSize < 0 {
-		return nil, errors.New("min_size and max_size cannot be negative")
+		return nil, errors.New("min_size 和 max_size 不能为负数")
 	}
 	if cfg.MaxSize > 0 && cfg.MinSize > cfg.MaxSize {
-		return nil, errors.New("min_size cannot be greater than max_size")
+		return nil, errors.New("min_size 不能大于 max_size")
 	}
 
 	sourceDir, err := filepath.Abs(filepath.Clean(cfg.SourceDir))
 	if err != nil {
-		return nil, fmt.Errorf("resolve source_dir: %w", err)
+		return nil, fmt.Errorf("解析 source_dir 失败: %w", err)
 	}
 	targetDir, err := filepath.Abs(filepath.Clean(cfg.TargetDir))
 	if err != nil {
-		return nil, fmt.Errorf("resolve target_dir: %w", err)
+		return nil, fmt.Errorf("解析 target_dir 失败: %w", err)
 	}
 	if backend == "local" && samePath(sourceDir, targetDir) {
-		return nil, errors.New("source_dir and target_dir must be different")
+		return nil, errors.New("source_dir 和 target_dir 不能相同")
 	}
 	if backend == "local" && pathWithin(sourceDir, targetDir) {
-		return nil, errors.New("target_dir cannot be inside source_dir")
+		return nil, errors.New("target_dir 不能位于 source_dir 内部")
 	}
 	if backend == "openlist" {
 		if !strings.HasPrefix(cfg.SourceDir, "/") || !strings.HasPrefix(cfg.TargetDir, "/") {
-			return nil, errors.New("openlist source_dir and target_dir must start with /")
+			return nil, errors.New("openlist 的 source_dir 和 target_dir 必须以 / 开头")
 		}
 		if cleanRemotePath(cfg.SourceDir) == cleanRemotePath(cfg.TargetDir) {
-			return nil, errors.New("source_dir and target_dir must be different")
+			return nil, errors.New("source_dir 和 target_dir 不能相同")
 		}
 		if remotePathWithin(cfg.SourceDir, cfg.TargetDir) {
-			return nil, errors.New("target_dir cannot be inside source_dir")
+			return nil, errors.New("target_dir 不能位于 source_dir 内部")
 		}
 	}
 
@@ -183,14 +208,14 @@ func New(cfg *Config) (*FileMover, error) {
 	if strings.TrimSpace(cfg.Regex) != "" {
 		pattern, err = regexp.Compile(cfg.Regex)
 		if err != nil {
-			return nil, fmt.Errorf("compile regex: %w", err)
+			return nil, fmt.Errorf("编译 regex 失败: %w", err)
 		}
 	}
 	var renamePattern *regexp.Regexp
 	if strings.TrimSpace(cfg.RenameRegex) != "" {
 		renamePattern, err = regexp.Compile(cfg.RenameRegex)
 		if err != nil {
-			return nil, fmt.Errorf("compile rename_regex: %w", err)
+			return nil, fmt.Errorf("编译 rename_regex 失败: %w", err)
 		}
 	}
 
@@ -200,11 +225,12 @@ func New(cfg *Config) (*FileMover, error) {
 		targetDir: targetDir,
 		pattern:   pattern,
 		rename:    renamePattern,
+		logger:    core.GetLogger(),
 	}
 	if backend == "openlist" {
 		client, err := alist.GetClient(cfg.URL, cfg.Username, cfg.Password, cfg.Token)
 		if err != nil {
-			return nil, fmt.Errorf("create OpenList client: %w", err)
+			return nil, fmt.Errorf("创建 OpenList 客户端失败: %w", err)
 		}
 		// 声明本任务的限流策略（0 表示不限流），共享客户端时后启动者生效
 		client.SetRateLimit(cfg.QPSLimit)
@@ -217,6 +243,7 @@ func New(cfg *Config) (*FileMover, error) {
 // cancelled. A non-nil error means the scan itself failed or one or more
 // files could not be moved; successful files are still reflected in report.
 func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
+	m.infof("开始FileMove扫描")
 	if m.client != nil {
 		return m.moveOpenList(ctx)
 	}
@@ -229,18 +256,18 @@ func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
 	}
 	info, err := os.Stat(m.sourceDir)
 	if err != nil {
-		return report, fmt.Errorf("stat source_dir: %w", err)
+		return report, fmt.Errorf("读取 source_dir 状态失败: %w", err)
 	}
 	if !info.IsDir() {
-		return report, fmt.Errorf("source_dir is not a directory: %s", m.sourceDir)
+		return report, fmt.Errorf("source_dir 不是目录: %s", m.sourceDir)
 	}
 	if err := os.MkdirAll(m.targetDir, 0755); err != nil {
-		return report, fmt.Errorf("create target_dir: %w", err)
+		return report, fmt.Errorf("创建 target_dir 失败: %w", err)
 	}
 
 	err = filepath.WalkDir(m.sourceDir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			report.Errors = append(report.Errors, fmt.Errorf("walk %s: %w", path, walkErr))
+			report.Errors = append(report.Errors, fmt.Errorf("遍历 %s 失败: %w", path, walkErr))
 			return nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -267,12 +294,12 @@ func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
 						return nil
 					}
 					if err := os.Remove(renamed); err != nil {
-						report.Errors = append(report.Errors, fmt.Errorf("remove existing rename target %s: %w", renamed, err))
+						report.Errors = append(report.Errors, fmt.Errorf("删除已存在的重命名目标 %s 失败: %w", renamed, err))
 						return nil
 					}
 				}
 				if err := os.Rename(path, renamed); err != nil {
-					report.Errors = append(report.Errors, fmt.Errorf("rename %s to %s: %w", path, renamed, err))
+					report.Errors = append(report.Errors, fmt.Errorf("重命名 %s 为 %s 失败: %w", path, renamed, err))
 					return nil
 				}
 				report.Renamed++
@@ -281,12 +308,12 @@ func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
 		}
 		fileInfo, err := os.Stat(path)
 		if err != nil {
-			report.Errors = append(report.Errors, fmt.Errorf("stat %s: %w", path, err))
+			report.Errors = append(report.Errors, fmt.Errorf("读取文件状态 %s 失败: %w", path, err))
 			return nil
 		}
 		rel, err := filepath.Rel(m.sourceDir, path)
 		if err != nil {
-			report.Errors = append(report.Errors, fmt.Errorf("relative path %s: %w", path, err))
+			report.Errors = append(report.Errors, fmt.Errorf("计算相对路径 %s 失败: %w", path, err))
 			return nil
 		}
 		if !m.matches(filepath.ToSlash(rel), fileInfo.Size()) {
@@ -301,7 +328,7 @@ func (m *FileMover) Move(ctx context.Context) (MoveReport, error) {
 		}
 		destination := filepath.Join(m.targetDir, destinationRel)
 		if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
-			report.Errors = append(report.Errors, fmt.Errorf("create parent for %s: %w", destination, err))
+			report.Errors = append(report.Errors, fmt.Errorf("创建父目录 %s 失败: %w", destination, err))
 			return nil
 		}
 		if err := moveFile(path, destination, fileInfo, m.config.Overwrite); err != nil {
@@ -335,7 +362,7 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 	targetDir := cleanRemotePath(m.config.TargetDir)
 	files, err := listOpenListRecursive(ctx, m.client, sourceDir)
 	if err != nil {
-		return report, fmt.Errorf("list OpenList source_dir: %w", err)
+		return report, fmt.Errorf("列出 OpenList source_dir 失败: %w", err)
 	}
 	matchedDirs := map[string]int{}
 	movedDirs := map[string]int{}
@@ -358,12 +385,12 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 						continue
 					}
 					if err := m.client.FSRemove(ctx, pathDir(newPath), []string{pathBase(newPath)}); err != nil {
-						report.Errors = append(report.Errors, fmt.Errorf("remove existing rename target %s: %w", newPath, err))
+						report.Errors = append(report.Errors, fmt.Errorf("删除已存在的重命名目标 %s 失败: %w", newPath, err))
 						continue
 					}
 				}
 				if err := m.client.FSRename(ctx, file.FullPath, newName); err != nil {
-					report.Errors = append(report.Errors, fmt.Errorf("rename %s to %s: %w", file.FullPath, newPath, err))
+					report.Errors = append(report.Errors, fmt.Errorf("重命名 %s 为 %s 失败: %w", file.FullPath, newPath, err))
 					continue
 				}
 				file.FullPath, file.Name, rel = newPath, newName, filepath.ToSlash(filepath.Join(filepath.Dir(rel), newName))
@@ -387,16 +414,16 @@ func (m *FileMover) moveOpenList(ctx context.Context) (MoveReport, error) {
 			}
 			// overwrite 时先删除旧目标，避免 fs/move 撞名被服务端自动改名后误删对象
 			if err := m.client.FSRemove(ctx, pathDir(destination), []string{pathBase(destination)}); err != nil {
-				report.Errors = append(report.Errors, fmt.Errorf("remove existing destination %s: %w", destination, err))
+				report.Errors = append(report.Errors, fmt.Errorf("删除已存在的目标 %s 失败: %w", destination, err))
 				continue
 			}
 		}
 		if err := m.client.FSMkdir(ctx, pathDir(destination)); err != nil {
-			report.Errors = append(report.Errors, fmt.Errorf("create target directory %s: %w", pathDir(destination), err))
+			report.Errors = append(report.Errors, fmt.Errorf("创建目标目录 %s 失败: %w", pathDir(destination), err))
 			continue
 		}
 		if err := m.client.FSMove(ctx, pathDir(file.FullPath), pathDir(destination), []string{pathBase(file.FullPath)}); err != nil {
-			report.Errors = append(report.Errors, fmt.Errorf("move %s to %s: %w", file.FullPath, destination, err))
+			report.Errors = append(report.Errors, fmt.Errorf("移动 %s 到 %s 失败: %w", file.FullPath, destination, err))
 			continue
 		}
 		report.Moved++
@@ -429,7 +456,7 @@ func removeMatchedLocalDirs(sourceDir string, matchedDirs, movedDirs map[string]
 	removed := 0
 	for _, dir := range paths {
 		if err := os.RemoveAll(dir); err != nil {
-			return removed, fmt.Errorf("remove matched source directory %s: %w", dir, err)
+			return removed, fmt.Errorf("删除已匹配的源目录 %s 失败: %w", dir, err)
 		}
 		removed++
 	}
@@ -453,7 +480,7 @@ func (m *FileMover) removeMatchedOpenListDirs(ctx context.Context, sourceDir str
 	removed := 0
 	for _, dir := range paths {
 		if err := m.client.FSRemove(ctx, pathDir(dir), []string{pathBase(dir)}); err != nil {
-			return removed, fmt.Errorf("remove matched OpenList directory %s: %w", dir, err)
+			return removed, fmt.Errorf("删除已匹配的 OpenList 目录 %s 失败: %w", dir, err)
 		}
 		removed++
 	}
@@ -532,9 +559,9 @@ func (m *FileMover) matches(relativePath string, size int64) bool {
 func moveFile(source, destination string, info fs.FileInfo, overwrite bool) error {
 	if !overwrite {
 		if _, err := os.Lstat(destination); err == nil {
-			return fmt.Errorf("destination exists: %w: %s", fs.ErrExist, destination)
+			return fmt.Errorf("目标已存在: %w: %s", fs.ErrExist, destination)
 		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("check destination %s: %w", destination, err)
+			return fmt.Errorf("检查目标 %s 失败: %w", destination, err)
 		}
 	}
 
@@ -547,28 +574,28 @@ func moveFile(source, destination string, info fs.FileInfo, overwrite bool) erro
 	// the completed copy so an interrupted copy never becomes the final file.
 	temporary, err := os.CreateTemp(filepath.Dir(destination), ".autofilm-move-*")
 	if err != nil {
-		return fmt.Errorf("create temporary destination for %s: %w", destination, err)
+		return fmt.Errorf("创建临时目标 %s 失败: %w", destination, err)
 	}
 	temporaryPath := temporary.Name()
 	if err := temporary.Close(); err != nil {
 		os.Remove(temporaryPath)
-		return fmt.Errorf("close temporary destination %s: %w", temporaryPath, err)
+		return fmt.Errorf("关闭临时目标 %s 失败: %w", temporaryPath, err)
 	}
 	defer os.Remove(temporaryPath)
 
 	if err := copyFile(source, temporaryPath, info); err != nil {
-		return fmt.Errorf("copy %s to %s: %w", source, destination, err)
+		return fmt.Errorf("复制 %s 到 %s 失败: %w", source, destination, err)
 	}
 	if overwrite {
 		if err := os.Remove(destination); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("replace destination %s: %w", destination, err)
+			return fmt.Errorf("替换目标 %s 失败: %w", destination, err)
 		}
 	}
 	if err := os.Rename(temporaryPath, destination); err != nil {
-		return fmt.Errorf("finalize destination %s: %w", destination, err)
+		return fmt.Errorf("落盘目标 %s 失败: %w", destination, err)
 	}
 	if err := os.Remove(source); err != nil {
-		return fmt.Errorf("remove source %s after copy: %w", source, err)
+		return fmt.Errorf("复制后删除源文件 %s 失败: %w", source, err)
 	}
 	return nil
 }

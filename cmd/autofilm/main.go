@@ -252,7 +252,7 @@ func main() {
 
 	// 添加FileMove任务
 	if err := addFileMoveJobs(cronScheduler, true); err != nil {
-		logger.Errorf("add FileMove jobs failed: %v", err)
+		logger.Errorf("添加 FileMove 任务失败: %v", err)
 	}
 
 	// 添加AlistSync任务
@@ -620,11 +620,11 @@ func addFileMoveJobs(c *cron.Cron, fireRunOnStart bool) error {
 	for _, raw := range list {
 		config, err := parseFileMoveConfig(raw)
 		if err != nil {
-			logger.Errorf("parse FileMove config failed: %v", err)
+			logger.Errorf("解析 FileMove 配置失败: %v", err)
 			continue
 		}
 		if config.Cron == "" {
-			logger.Warnf("FileMove %s has no cron expression", config.ID)
+			logger.Warnf("FileMove %s 未设置 cron 表达式", config.ID)
 			continue
 		}
 
@@ -641,18 +641,18 @@ func addFileMoveJobs(c *cron.Cron, fireRunOnStart bool) error {
 					return err
 				}
 				report, err := mover.Move(context.Background())
-				logger.Infof("FileMove %s completed: scanned=%d matched=%d renamed=%d moved=%d removed_dirs=%d skipped=%d errors=%d",
+				logger.Infof("FileMove %s 完成：扫描=%d 匹配=%d 重命名=%d 移动=%d 删除目录=%d 跳过=%d 错误=%d",
 					config.ID, report.Scanned, report.Matched, report.Renamed, report.Moved, report.RemovedDirs, report.Skipped, len(report.Errors))
 				return err
 			})
 			if err != nil {
-				logger.Errorf("FileMove run failed: %v", err)
+				logger.Errorf("FileMove 运行失败: %v", err)
 			}
 		})
 		web.GetModuleRegistry().Register(entry)
 		runFileMove := withSingleFlight(web.ModuleFileMove, config.ID, entry.RunFunc)
 		if _, err := c.AddFunc(config.Cron, runFileMove); err != nil {
-			logger.Errorf("add FileMove job failed %s: %v", config.ID, err)
+			logger.Errorf("添加 FileMove 任务失败 %s: %v", config.ID, err)
 		}
 		// run_on_start 仅在进程启动时触发，配置热重载不再重复触发
 		if fireRunOnStart && config.RunOnStart && config.Enable {
