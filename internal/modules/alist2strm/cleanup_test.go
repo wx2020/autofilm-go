@@ -23,13 +23,15 @@ func newTestA2S(t *testing.T) (*Alist2Strm, string) {
 	}, target
 }
 
-// TestCalcQPSDefaults QPS 计算策略：显式配置优先，自动模式 = max(workers/2,1) 封顶 10
+// TestCalcQPSDefaults QPS 计算策略：显式配置优先（R2：超 20 截断），自动模式 = max(workers/2,1) 封顶 10
 func TestCalcQPSDefaults(t *testing.T) {
 	cases := []struct{ limit, workers, want int }{
 		{0, 50, 10},
 		{0, 4, 2},
 		{0, 1, 1},
-		{30, 50, 30},
+		{15, 50, 15},
+		{30, 50, 20},
+		{100, 4, 20},
 		{0, 0, 1},
 	}
 	for _, c := range cases {

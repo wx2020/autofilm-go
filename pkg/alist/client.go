@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -260,8 +261,8 @@ func (c *AlistClient) getToken() string {
 	c.refreshing.Store(false)
 
 	if err != nil {
-		c.logger.Errorf("重新获取令牌失败: %v", err)
-		return ""
+		c.logger.Errorf("重新获取令牌失败: %v（继续使用旧令牌，避免空 Authorization 引发 401 风暴）", err)
+		return tok
 	}
 
 	c.tokenMu.Lock()
@@ -291,14 +292,53 @@ func (c *AlistClient) LimitQPS() int {
 }
 
 // SetRateLimit 设置 QPS 限流（qps<=0 取消限流）
-// 注意：通过 GetClient 缓存共享同一客户端的所有任务共用这一个限流器，
-// 后设置的值对全部在途/后续请求生效。
+// 注意：通过 GetClient 缓存共享同一客户端的所有任务共用这一个限流器。
+// 为防止高限流任务把低限流任务带 burst，正值采用取最小语义：
+// 仅当新值更严格（或当前未设置）时才覆盖；qps<=0 保持原有取消语义。
 func (c *AlistClient) SetRateLimit(qps int) {
 	if qps <= 0 {
 		c.rateLimiter.Store(nil)
 		return
 	}
-	c.rateLimiter.Store(rate.NewLimiter(rate.Limit(qps), qps))
+	for {
+		old := c.rateLimiter.Load()
+		if old != nil && int(old.Limit()) <= qps {
+			return
+		}
+		fresh := rate.NewLimiter(rate.Limit(qps), qps)
+		if c.rateLimiter.CompareAndSwap(old, fresh) {
+			if old != nil {
+				c.logger.Debugf("共享客户端限流保持更严格值 %d（忽略放宽到 %d）", int(old.Limit()), qps)
+			}
+			return
+		}
+	}
+}
+
+// forceRefresh 强制重新登录刷新令牌（401 后重试前调用一次）
+// 失败时保留旧令牌，返回刷新后的有效令牌（可能仍是旧值）。
+func (c *AlistClient) forceRefresh(ctx context.Context) string {
+	c.loginMu.Lock()
+	defer c.loginMu.Unlock()
+
+	c.refreshing.Store(true)
+	newToken, err := c.authLogin(ctx)
+	c.refreshing.Store(false)
+
+	if err != nil {
+		c.logger.Errorf("强制刷新令牌失败: %v", err)
+		c.tokenMu.RLock()
+		defer c.tokenMu.RUnlock()
+		return c.token
+	}
+
+	c.tokenMu.Lock()
+	c.token = newToken
+	// 令牌有效期2天，提前5分钟刷新
+	c.tokenExp = time.Now().Unix() + 2*24*60*60 - 5*60
+	c.tokenMu.Unlock()
+
+	return newToken
 }
 
 func (c *AlistClient) doRequest(ctx context.Context, method, endpoint string, jsonData []byte) (*APIResponse, error) {
@@ -307,6 +347,13 @@ func (c *AlistClient) doRequest(ctx context.Context, method, endpoint string, js
 
 // doRequestWithHeaders 允许调用方覆盖/追加 HTTP 头
 // （为 PUT 流式上传 octet-stream + File-Path 等场景留口，本轮离线下载仍用默认 JSON 头）
+//
+// 重试策略（R5）：httpclient 已对传输层错误重试 3 次；此处再对
+//   - HTTP 429/502/503/504：指数退避（1s/2s/4s）+ 尊重 Retry-After，最多 3 次；
+//   - HTTP 401：强制刷新令牌一次后重试一次；
+//   - API 业务错误（code!=200，如驱动 EOF）：除“不存在”类外退避重试 2 次。
+//
+// 避免瞬时抖动直接上抛，进而触发整树回退全量。
 func (c *AlistClient) doRequestWithHeaders(ctx context.Context, method, endpoint string, jsonData []byte, extraHeaders map[string]string) (*APIResponse, error) {
 	// 原子读取一次，避免读取过程中被其他协程替换导致不一致
 	if lim := c.rateLimiter.Load(); lim != nil {
@@ -316,44 +363,116 @@ func (c *AlistClient) doRequestWithHeaders(ctx context.Context, method, endpoint
 	}
 
 	url := c.url + endpoint
-	headers := c.makeHeaders()
-	for k, v := range extraHeaders {
-		headers[k] = v
+	refreshed401 := false
+
+	for attempt := 0; ; attempt++ {
+		headers := c.makeHeaders()
+		for k, v := range extraHeaders {
+			headers[k] = v
+		}
+
+		var resp *httpclient.Response
+		var err error
+
+		switch method {
+		case "GET":
+			resp, err = c.httpClient.Get(ctx, url, headers)
+		case "POST":
+			resp, err = c.httpClient.Post(ctx, url, headers, jsonData)
+		case "PUT":
+			resp, err = c.httpClient.Put(ctx, url, headers, jsonData)
+		default:
+			return nil, fmt.Errorf("不支持的HTTP方法: %s", method)
+		}
+
+		if err != nil {
+			return nil, err
+		}
+
+		// 401：令牌可能被服务端提前作废，强制刷新一次后重试一次
+		if resp.StatusCode == http.StatusUnauthorized && !refreshed401 {
+			refreshed401 = true
+			c.forceRefresh(ctx)
+			continue
+		}
+
+		// 429/5xx：退避重试
+		if isRetryableHTTPStatus(resp.StatusCode) && attempt < 3 {
+			wait := retryAfterDelay(resp.Header, attempt)
+			c.logger.Warnf("请求 %s 返回 %d，%v 后重试（第 %d/3 次）: %s",
+				endpoint, resp.StatusCode, wait, attempt+1, snippet(resp.Body))
+			if sleepErr := sleepCtx(ctx, wait); sleepErr != nil {
+				return nil, sleepErr
+			}
+			continue
+		}
+
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("请求失败 %s，状态码: 401（令牌刷新后仍未授权，请检查账号密码）", endpoint)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("请求失败 %s，状态码: %d, body: %s", endpoint, resp.StatusCode, snippet(resp.Body))
+		}
+
+		var apiResp APIResponse
+		if err := json.Unmarshal(resp.Body, &apiResp); err != nil {
+			return nil, fmt.Errorf("解析响应失败 %s (status=%d, content-type=%s, body=%s): %w",
+				endpoint, resp.StatusCode, resp.Header.Get("Content-Type"), snippet(resp.Body), err)
+		}
+
+		if apiResp.Code != 200 {
+			apiErr := fmt.Errorf("API错误: %s", apiResp.Message)
+			// “不存在”类是确定性结果，不重试；其余业务错误（如云盘驱动 EOF）退避重试 2 次
+			if !isNotFoundMessage(apiResp.Message) && attempt < 2 {
+				wait := time.Duration(1<<attempt) * time.Second
+				c.logger.Warnf("请求 %s 业务错误，%v 后重试（第 %d/2 次）: %s",
+					endpoint, wait, attempt+1, apiResp.Message)
+				if sleepErr := sleepCtx(ctx, wait); sleepErr != nil {
+					return nil, sleepErr
+				}
+				continue
+			}
+			return nil, apiErr
+		}
+
+		return &apiResp, nil
 	}
+}
 
-	var resp *httpclient.Response
-	var err error
+// isRetryableHTTPStatus 可重试的 HTTP 状态码：限流与网关类瞬时错误
+func isRetryableHTTPStatus(code int) bool {
+	return code == http.StatusTooManyRequests ||
+		code == http.StatusBadGateway ||
+		code == http.StatusServiceUnavailable ||
+		code == http.StatusGatewayTimeout
+}
 
-	switch method {
-	case "GET":
-		resp, err = c.httpClient.Get(ctx, url, headers)
-	case "POST":
-		resp, err = c.httpClient.Post(ctx, url, headers, jsonData)
-	case "PUT":
-		resp, err = c.httpClient.Put(ctx, url, headers, jsonData)
-	default:
-		return nil, fmt.Errorf("不支持的HTTP方法: %s", method)
+// retryAfterDelay 解析 Retry-After（秒数或 HTTP 日期），解析失败则按 attempt 指数退避 1s/2s/4s
+func retryAfterDelay(h http.Header, attempt int) time.Duration {
+	if v := strings.TrimSpace(h.Get("Retry-After")); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs >= 0 && secs <= 300 {
+			return time.Duration(secs) * time.Second
+		}
+		if t, err := time.Parse(time.RFC1123, v); err == nil {
+			if d := time.Until(t); d > 0 && d <= 5*time.Minute {
+				return d
+			}
+		}
 	}
+	return time.Duration(1<<attempt) * time.Second
+}
 
-	if err != nil {
-		return nil, err
+// sleepCtx 可被 ctx 打断的睡眠，ctx 取消时返回 ctx.Err
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("请求失败 %s，状态码: %d, body: %s", endpoint, resp.StatusCode, snippet(resp.Body))
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
 	}
-
-	var apiResp APIResponse
-	if err := json.Unmarshal(resp.Body, &apiResp); err != nil {
-		return nil, fmt.Errorf("解析响应失败 %s (status=%d, content-type=%s, body=%s): %w",
-			endpoint, resp.StatusCode, resp.Header.Get("Content-Type"), snippet(resp.Body), err)
-	}
-
-	if apiResp.Code != 200 {
-		return nil, fmt.Errorf("API错误: %s", apiResp.Message)
-	}
-
-	return &apiResp, nil
 }
 
 // authLogin 登录获取令牌
@@ -510,8 +629,8 @@ type FSPutFile struct {
 
 // 离线下载默认工具与删除策略（OpenList v4.2.6: POST /api/fs/add_offline_download）
 const (
-	OfflineToolSimpleHTTP      = "SimpleHttp"
-	OfflineDeleteOnSucceed     = "delete_on_upload_succeed"
+	OfflineToolSimpleHTTP  = "SimpleHttp"
+	OfflineDeleteOnSucceed = "delete_on_upload_succeed"
 )
 
 // AddOfflineDownload 提交离线下载任务（OpenList v4.2.6 标准接口）
@@ -803,26 +922,39 @@ func (c *AlistClient) GetStorageByMountPath(ctx context.Context, mountPath strin
 }
 
 // IterPath 遍历路径（异步生成器）
+// R1：单目录失败只跳过该子树（错误带路径写入 errCh，调用方置 scanComplete=false），
+// 不再中断整树，避免一个坏目录导致整轮扫描作废。
 func (c *AlistClient) IterPath(ctx context.Context, dirPath string, waitTime time.Duration, isDetail bool, filterFunc func(*AlistPath) bool) (<-chan *AlistPath, <-chan error) {
 	outCh := make(chan *AlistPath)
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 64)
 
 	go func() {
 		defer close(outCh)
 		defer close(errCh)
 
-		if err := c.iterPathRecursive(ctx, dirPath, waitTime, isDetail, filterFunc, outCh); err != nil {
-			errCh <- err
-		}
+		_ = c.iterPathRecursive(ctx, dirPath, waitTime, isDetail, filterFunc, outCh, errCh)
 	}()
 
 	return outCh, errCh
 }
 
-func (c *AlistClient) iterPathRecursive(ctx context.Context, dirPath string, waitTime time.Duration, isDetail bool, filterFunc func(*AlistPath) bool, outCh chan<- *AlistPath) error {
+// reportIterErr 非阻塞上报遍历错误（errCh 写满时丢弃但已打日志，避免坏目录多时死锁）
+func (c *AlistClient) reportIterErr(errCh chan<- error, err error) {
+	c.logger.Warnf("遍历跳过异常子树: %v", err)
+	select {
+	case errCh <- err:
+	default:
+	}
+}
+
+func (c *AlistClient) iterPathRecursive(ctx context.Context, dirPath string, waitTime time.Duration, isDetail bool, filterFunc func(*AlistPath) bool, outCh chan<- *AlistPath, errCh chan<- error) error {
 	paths, err := c.FSList(ctx, dirPath)
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		c.reportIterErr(errCh, fmt.Errorf("FSList %s: %w", dirPath, err))
+		return nil
 	}
 
 	if waitTime > 0 {
@@ -834,9 +966,12 @@ func (c *AlistClient) iterPathRecursive(ctx context.Context, dirPath string, wai
 	}
 
 	for _, path := range paths {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if path.IsDir() {
-			// 递归处理子目录
-			if err := c.iterPathRecursive(ctx, path.FullPath, waitTime, isDetail, filterFunc, outCh); err != nil {
+			// 递归处理子目录；子树失败已在内部上报并跳过，不中断兄弟目录
+			if err := c.iterPathRecursive(ctx, path.FullPath, waitTime, isDetail, filterFunc, outCh, errCh); err != nil {
 				return err
 			}
 			continue
@@ -918,11 +1053,35 @@ func snippet(body []byte) string {
 	return string(body[:max]) + "...(truncated)"
 }
 
+// notFoundSubstrings “不存在”类错误的消息特征（覆盖 OpenList/Alist 各版本与驱动的中英文文案）
+// 注意：有意不含 permission/denied/forbidden——无权限是确定性配置问题，调用方应按错误处理而非静默跳过。
+var notFoundSubstrings = []string{
+	"object not found",
+	"file not found",
+	"path not found",
+	"no such file",
+	"not exist",
+	"not found",
+	"不存在",
+	"找不到",
+}
+
+// isNotFoundMessage 判断业务 message 是否为“不存在”类（大小写不敏感）
+func isNotFoundMessage(msg string) bool {
+	lower := strings.ToLower(msg)
+	for _, s := range notFoundSubstrings {
+		if strings.Contains(lower, strings.ToLower(s)) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsNotFound 判断是否为“对象不存在”类错误
 // OpenList v4 对不存在路径返回 code!=200 且 message 含 object not found
 func IsNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(err.Error(), "object not found")
+	return isNotFoundMessage(err.Error())
 }

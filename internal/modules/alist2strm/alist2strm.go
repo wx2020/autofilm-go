@@ -131,19 +131,32 @@ func New(cfg *Config) (*Alist2Strm, error) {
 }
 
 // 日志 helper：所有日志自动带任务 ID 前缀，多配置并发时可区分归属
+// 容忍 logger 为空（单测直接构造实例时），避免空指针
 func (a2s *Alist2Strm) infof(format string, args ...interface{}) {
+	if a2s.logger == nil {
+		return
+	}
 	a2s.logger.Infof("[%s] %s", a2s.config.ID, fmt.Sprintf(format, args...))
 }
 
 func (a2s *Alist2Strm) warnf(format string, args ...interface{}) {
+	if a2s.logger == nil {
+		return
+	}
 	a2s.logger.Warnf("[%s] %s", a2s.config.ID, fmt.Sprintf(format, args...))
 }
 
 func (a2s *Alist2Strm) errorf(format string, args ...interface{}) {
+	if a2s.logger == nil {
+		return
+	}
 	a2s.logger.Errorf("[%s] %s", a2s.config.ID, fmt.Sprintf(format, args...))
 }
 
 func (a2s *Alist2Strm) debugf(format string, args ...interface{}) {
+	if a2s.logger == nil {
+		return
+	}
 	a2s.logger.Debugf("[%s] %s", a2s.config.ID, fmt.Sprintf(format, args...))
 }
 
@@ -300,14 +313,32 @@ func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
 	}
 
 	// 轻量递归遍历（不调用 fs/get）
-	files, err := a2s.iterPathLight(ctx, a2s.config.SourceDir, waitTime)
+	// R1：单目录失败只跳过该子树（failedDirs），不再回退全量；
+	// 仅根目录本身失败才直接返回错误（此时全量同样会撞墙，回退只会双倍加压）。
+	files, failedDirs, incomplete, err := a2s.iterPathLight(ctx, a2s.config.SourceDir, waitTime)
 	if err != nil {
-		a2s.errorf("增量遍历失败: %v，回退至全量扫描", err)
-		return a2s.runFull(ctx)
+		a2s.errorf("增量遍历失败: %v（根目录不可达，已跳过本轮，不回退全量）", err)
+		return err
+	}
+	if incomplete {
+		a2s.warnf("增量遍历部分完成：%d 个异常子树已跳过，本轮不清理本地文件: %v", len(failedDirs), failedDirs)
 	}
 
 	// 构建新快照
 	newSnap := BuildSnapshot(files)
+
+	// R1：异常子树沿用旧快照条目（看不到≠被删除），防止下轮误判为新增，
+	// 也避免失败期间误删本地文件。
+	if incomplete && oldSnap != nil {
+		for path, entry := range oldSnap.Files {
+			for _, fd := range failedDirs {
+				if path == fd || strings.HasPrefix(path, fd+"/") {
+					newSnap.Files[path] = entry
+					break
+				}
+			}
+		}
+	}
 
 	// 远端成功响应但结果为空、且存在历史快照时，判定为数据源异常：
 	// 保留旧快照并跳过本轮清理，防止空列表触发全量误删
@@ -353,43 +384,88 @@ func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
 		len(newSnap.Files), len(added), len(modified), len(deleted), elapsed)
 
 	// 处理新增和修改的文件
+	// R4：AlistURL（未配 PublicURL）/ AlistPath 模式的视频文件可直接用 fs/list
+	// 数据构造 .strm（仅需 FullPath+Sign），跳过 fs/get；
+	// RawURL 模式、下载类文件（字幕/图片/NFO/OtherExt）仍需 RawURL，走并发 FSGet。
 	changed := append(added, modified...)
+	failedGet := make(map[string]struct{})
 	if len(changed) > 0 {
 		maxWorkers := a2s.config.MaxWorkers
 		if maxWorkers <= 0 {
 			maxWorkers = 50
 		}
 
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, maxWorkers)
+		lightByPath := make(map[string]*alist.AlistPath, len(files))
+		for i := range files {
+			fp := files[i].FullPath
+			if _, ok := lightByPath[fp]; !ok {
+				lightByPath[fp] = &files[i]
+			}
+		}
 
-		for _, fullPath := range changed {
+		jobs := make(chan *alist.AlistPath, maxWorkers*2)
+		var wg sync.WaitGroup
+		for i := 0; i < maxWorkers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for p := range jobs {
+					a2s.processFile(ctx, p)
+				}
+			}()
+		}
+		skippedFSGet := 0
+		for idx, fullPath := range changed {
 			if ctx.Err() != nil {
 				break
 			}
-
-			// 仅对变更文件调 fs/get 获取 RawURL（典型 1% 量级）
-			fileDetail, err := a2s.client.FSGet(ctx, fullPath)
-			if err != nil {
-				a2s.warnf("获取文件详情失败 %s: %v", fullPath, err)
-				continue
+			if idx > 0 && idx%500 == 0 {
+				a2s.infof("变更处理进度: %d/%d", idx, len(changed))
 			}
 
-			// 检查是否应处理该文件（含扩展名过滤、BDMV 收集）
+			light := lightByPath[fullPath]
+			var fileDetail *alist.AlistPath
+			if light != nil && !a2s.needFSGet(light) {
+				// 免 fs/get：复用轻量遍历数据（BDMV 成员仅收集，最大文件后续单独处理）
+				cp := *light
+				fileDetail = &cp
+				skippedFSGet++
+			} else {
+				// 需 RawURL：带退避重试的 FSGet（不存在类错误不重试）
+				detail, err := a2s.fsGetWithRetry(ctx, fullPath)
+				if err != nil {
+					a2s.warnf("获取文件详情失败 %s: %v（已从本轮快照剔除，下轮重试）", fullPath, err)
+					failedGet[fullPath] = struct{}{}
+					continue
+				}
+				fileDetail = detail
+			}
+
+			// 检查是否应处理该文件（含扩展名过滤、BDMV 收集；
+			// BDMV 成员仅收集稍后统一处理，shouldProcessFile 对其返回 false）
 			if !a2s.shouldProcessFile(fileDetail) {
 				continue
 			}
 
-			wg.Add(1)
-			p := fileDetail
-			go func() {
-				defer wg.Done()
-				sem <- struct{}{}
-				a2s.processFile(ctx, p)
-				<-sem
-			}()
+			select {
+			case jobs <- fileDetail:
+			case <-ctx.Done():
+				close(jobs)
+				wg.Wait()
+				return ctx.Err()
+			}
 		}
+		close(jobs)
 		wg.Wait()
+		if skippedFSGet > 0 {
+			a2s.infof("变更处理完成: %d/%d 个文件复用列表数据免 fs/get", skippedFSGet, len(changed))
+		}
+	}
+
+	// R6：本轮 FSGet 失败的路径从快照剔除，下轮 diff 会判为新增而重试，
+	// 避免“失败已固化、永不重试”的静默漏处理。
+	for fp := range failedGet {
+		delete(newSnap.Files, fp)
 	}
 
 	// 完成BDMV文件收集
@@ -431,8 +507,11 @@ func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
 	}
 
 	// 同步服务器（清理本地文件，含已删除文件）
+	// R1：遍历不完整时跳过清理——看不到≠被删除，防止异常期间误删本地。
 	if a2s.config.SyncServer {
-		if err := a2s.cleanupLocalFiles(ctx); err != nil {
+		if incomplete {
+			a2s.warnf("遍历不完整，跳过本地文件清理（异常子树 %d 个）", len(failedDirs))
+		} else if err := a2s.cleanupLocalFiles(ctx); err != nil {
 			a2s.errorf("清理本地文件失败: %v", err)
 		} else {
 			a2s.infof("清理过期的.strm文件完成")
@@ -443,9 +522,61 @@ func (a2s *Alist2Strm) runIncremental(ctx context.Context) error {
 	return nil
 }
 
+// needFSGet 判断变更文件是否必须调 fs/get 取详情
+// 免 fs/get 条件（R4）：视频文件 + 非 RawURL 模式 + 无需 RawURL 做同源判断
+// （AlistURL 模式配了 PublicURL 时需 RawURL 判断 sameHost；下载类文件需 RawURL 落盘）。
+func (a2s *Alist2Strm) needFSGet(light *alist.AlistPath) bool {
+	if light == nil {
+		return true
+	}
+	if IsBDMVFile(light) {
+		return false
+	}
+	ext := light.Suffix()
+	if a2s.downloadExts[ext] {
+		return true
+	}
+	if !extensions.IsVideoExt(ext) {
+		return true
+	}
+	if a2s.mode == RawURLMode {
+		return true
+	}
+	if a2s.mode == AlistURLMode && a2s.config.PublicURL != "" {
+		return true
+	}
+	return false
+}
+
+// fsGetWithRetry 带退避重试的 FSGet（R4/R5）
+// “不存在”类错误不重试；其余错误最多重试 1 次（doRequest 层已有 429/5xx 与业务错误退避）。
+func (a2s *Alist2Strm) fsGetWithRetry(ctx context.Context, fullPath string) (*alist.AlistPath, error) {
+	detail, err := a2s.client.FSGet(ctx, fullPath)
+	if err == nil {
+		return detail, nil
+	}
+	if alist.IsNotFound(err) || ctx.Err() != nil {
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(2 * time.Second):
+	}
+	return a2s.client.FSGet(ctx, fullPath)
+}
+
+// maxQPSHardCap 用户 QPS 配置硬上限（R2）：超过此值极易触发服务端 429/反代限流
+const maxQPSHardCap = 20
+
 // calcQPS 计算 QPS 限制值
 func (a2s *Alist2Strm) calcQPS() int {
 	if a2s.config.QPSLimit > 0 {
+		if a2s.config.QPSLimit > maxQPSHardCap {
+			a2s.warnf("QPS限制 %d 超过硬上限 %d，已截断（过大易触发服务端 429）",
+				a2s.config.QPSLimit, maxQPSHardCap)
+			return maxQPSHardCap
+		}
 		return a2s.config.QPSLimit
 	}
 	qps := a2s.config.MaxWorkers / 2
