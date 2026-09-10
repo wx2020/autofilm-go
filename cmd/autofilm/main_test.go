@@ -30,6 +30,12 @@ func setupMainTestStore(t *testing.T) *storage.Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
+	// 与生产 InitDB 对齐：忙等待 + 单写连接，否则轮询 goroutine 与后台任务写并发时偶发 SQLITE_BUSY
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	if err := storage.RunMigrations(db); err != nil {
 		t.Fatalf("RunMigrations: %v", err)
