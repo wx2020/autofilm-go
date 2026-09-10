@@ -681,6 +681,18 @@ func (s *Store) FinishTaskRun(id int64, status, errSummary string, filesTotal, f
 	return err
 }
 
+// MarkInterruptedTaskRuns 将残留 running 记录置为 interrupted。
+// 运行中状态只活在内存：进程重启/崩溃时 TrackRun 来不及 Finish，落盘行会永远显示“运行中”，
+// 污染最近运行列表与模块上次状态。启动时调用一次收敛，返回收敛条数。
+func (s *Store) MarkInterruptedTaskRuns() (int64, error) {
+	res, err := s.db.Exec(`UPDATE task_runs SET status='interrupted',
+		error_summary='进程重启前未完成', finished_at=CURRENT_TIMESTAMP WHERE status='running'`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // ListTaskRuns 列出运行记录
 func (s *Store) ListTaskRuns(moduleType string, limit int) ([]*TaskRun, error) {
 	rows, err := s.db.Query(`SELECT id, module_type, config_id, config_uid, started_at, finished_at, status, error_summary,
@@ -701,6 +713,31 @@ func (s *Store) ListTaskRuns(moduleType string, limit int) ([]*TaskRun, error) {
 		runs = append(runs, r)
 	}
 	return runs, rows.Err()
+}
+
+// CountTaskRuns 按模块统计已完成运行数（success+failed；running 不计入累计）。
+// 供监控页累计执行/累计失败使用，数据来自数据库，重启不丢失。
+func (s *Store) CountTaskRuns() (runs, failures map[string]uint64, err error) {
+	runs = map[string]uint64{}
+	failures = map[string]uint64{}
+	rows, err := s.db.Query(`SELECT module_type, status, COUNT(*) FROM task_runs
+		WHERE status IN ('success','failed','interrupted') GROUP BY module_type, status`)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var moduleType, status string
+		var n uint64
+		if err := rows.Scan(&moduleType, &status, &n); err != nil {
+			return nil, nil, err
+		}
+		runs[moduleType] += n
+		if status == "failed" || status == "interrupted" {
+			failures[moduleType] += n
+		}
+	}
+	return runs, failures, rows.Err()
 }
 
 // GetLatestTaskRun returns the latest run for a module configuration.

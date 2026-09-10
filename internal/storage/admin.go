@@ -292,6 +292,15 @@ func (s *Store) AcknowledgeAlert(id int64) error {
 	return err
 }
 
+// AcknowledgeAllAlerts 一键确认全部未确认告警，返回确认条数
+func (s *Store) AcknowledgeAllAlerts() (int64, error) {
+	res, err := s.db.Exec("UPDATE alerts SET acknowledged=1 WHERE acknowledged=0")
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (s *Store) ExportBackup() (*Backup, error) {
 	settings, err := s.GetAppSettings()
 	if err != nil {

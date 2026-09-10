@@ -354,7 +354,18 @@ func (c *AlistClient) doRequest(ctx context.Context, method, endpoint string, js
 //   - API 业务错误（code!=200，如驱动 EOF）：除“不存在”类外退避重试 2 次。
 //
 // 避免瞬时抖动直接上抛，进而触发整树回退全量。
+// 存在性探测等“失败即按不存在处理”的调用请用 doRequestNoRetry，免去退避等待。
 func (c *AlistClient) doRequestWithHeaders(ctx context.Context, method, endpoint string, jsonData []byte, extraHeaders map[string]string) (*APIResponse, error) {
+	return c.doRequestInternal(ctx, method, endpoint, jsonData, extraHeaders, true)
+}
+
+// doRequestNoRetry 单次请求（无 HTTP/API 层退避重试）。
+// 401 刷新保留一次（鉴权正确性，非瞬时重试）：无有效令牌时探测本身无意义。
+func (c *AlistClient) doRequestNoRetry(ctx context.Context, method, endpoint string, jsonData []byte) (*APIResponse, error) {
+	return c.doRequestInternal(ctx, method, endpoint, jsonData, nil, false)
+}
+
+func (c *AlistClient) doRequestInternal(ctx context.Context, method, endpoint string, jsonData []byte, extraHeaders map[string]string, retry bool) (*APIResponse, error) {
 	// 原子读取一次，避免读取过程中被其他协程替换导致不一致
 	if lim := c.rateLimiter.Load(); lim != nil {
 		if err := lim.Wait(ctx); err != nil {
@@ -396,8 +407,8 @@ func (c *AlistClient) doRequestWithHeaders(ctx context.Context, method, endpoint
 			continue
 		}
 
-		// 429/5xx：退避重试
-		if isRetryableHTTPStatus(resp.StatusCode) && attempt < 3 {
+		// 429/5xx：退避重试（探测类调用 retry=false，直接落到下面的状态码错误返回）
+		if retry && isRetryableHTTPStatus(resp.StatusCode) && attempt < 3 {
 			wait := retryAfterDelay(resp.Header, attempt)
 			c.logger.Warnf("请求 %s 返回 %d，%v 后重试（第 %d/3 次）: %s",
 				endpoint, resp.StatusCode, wait, attempt+1, snippet(resp.Body))
@@ -423,7 +434,8 @@ func (c *AlistClient) doRequestWithHeaders(ctx context.Context, method, endpoint
 		if apiResp.Code != 200 {
 			apiErr := fmt.Errorf("API错误: %s", apiResp.Message)
 			// “不存在”类是确定性结果，不重试；其余业务错误（如云盘驱动 EOF）退避重试 2 次
-			if !isNotFoundMessage(apiResp.Message) && attempt < 2 {
+			// （探测类调用 retry=false，直接返回）
+			if retry && !isNotFoundMessage(apiResp.Message) && attempt < 2 {
 				wait := time.Duration(1<<attempt) * time.Second
 				c.logger.Warnf("请求 %s 业务错误，%v 后重试（第 %d/2 次）: %s",
 					endpoint, wait, attempt+1, apiResp.Message)
@@ -611,6 +623,35 @@ func (c *AlistClient) FSGet(ctx context.Context, path string) (*AlistPath, error
 	var result AlistPath
 	if err := json.Unmarshal(resp.Data, &result); err != nil {
 		c.logger.Errorf("FSGet JSON 解析失败: %v, 原始数据: %s", err, string(resp.Data))
+		return nil, err
+	}
+
+	result.ServerURL = c.url
+	result.BasePath = c.basePath
+	result.FullPath = path
+
+	return &result, nil
+}
+
+// FSGetNoRetry 单次 FSGet（无 HTTP/API 层退避重试，失败只打 Debug）。
+// 专供存在性探测与二次确认：调用方本就按“失败=不存在”处理，重试只是烧时间。
+func (c *AlistClient) FSGetNoRetry(ctx context.Context, path string) (*AlistPath, error) {
+	type GetRequest struct {
+		Path     string `json:"path"`
+		Password string `json:"password"`
+	}
+
+	jsonData, _ := json.Marshal(GetRequest{Path: path})
+
+	resp, err := c.doRequestNoRetry(ctx, "POST", "/api/fs/get", jsonData)
+	if err != nil {
+		c.logger.Debugf("FSGet(免重试) %s: %v", path, err)
+		return nil, err
+	}
+
+	var result AlistPath
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		c.logger.Debugf("FSGet(免重试) JSON 解析失败 %s: %v", path, err)
 		return nil, err
 	}
 
