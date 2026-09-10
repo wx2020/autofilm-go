@@ -248,7 +248,7 @@ func TestNewRejectsTargetInsideSource(t *testing.T) {
 		SourceDir: root,
 		TargetDir: filepath.Join(root, "moved"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "inside source_dir") {
+	if err == nil || !strings.Contains(err.Error(), "位于 source_dir 内部") {
 		t.Fatalf("expected nested target rejection, got %v", err)
 	}
 }

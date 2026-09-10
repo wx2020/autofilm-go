@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/akimio/autofilm/internal/core"
 	"github.com/gorilla/websocket"
@@ -76,13 +77,23 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	ch := SubscribeLogs()
 	defer UnsubscribeLogs(ch)
 
+	// 心跳：空闲连接保活（防反代杀长连接），写失败即断开
+	ping := time.NewTicker(30 * time.Second)
+	defer ping.Stop()
+
 	for {
 		select {
 		case entry, ok := <-ch:
 			if !ok {
 				return
 			}
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := conn.WriteMessage(websocket.TextMessage, []byte(entry)); err != nil {
+				return
+			}
+		case <-ping.C:
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
 		case <-r.Context().Done():
