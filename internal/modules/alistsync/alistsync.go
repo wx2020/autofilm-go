@@ -84,12 +84,9 @@ func New(cfg *Config) (*Alissync, error) {
 	return as, nil
 }
 
-// Run 执行同步
+// Run 执行同步（服务端直拷，同步完成即真实落盘，不再提交离线任务）
 func (as *Alissync) Run(ctx context.Context) error {
 	as.logger.Infof("开始 Alissync 同步: %s", as.config.ID)
-
-	// 确保守护协程已启动
-	as.daemon.Start(ctx)
 
 	// 同步每个 pair
 	for _, pair := range as.config.Pairs {

@@ -54,8 +54,11 @@ func TestShouldOverwrite(t *testing.T) {
 	if !ShouldOverwrite(OverwriteAlways, src, newer) {
 		t.Fatal("always rejected")
 	}
-	if ShouldOverwrite(OverwriteNever, src, nil) {
-		t.Fatal("never accepted")
+	if !ShouldOverwrite(OverwriteNever, src, nil) {
+		t.Fatal("never with missing dst should copy once")
+	}
+	if ShouldOverwrite(OverwriteNever, src, old) {
+		t.Fatal("never with existing dst should skip")
 	}
 	if !ShouldOverwrite(OverwriteIfNewer, src, old) {
 		t.Fatal("newer source rejected")

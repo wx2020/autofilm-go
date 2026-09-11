@@ -2,13 +2,16 @@ package alistsync
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/akimio/autofilm/pkg/alist"
 )
 
-// syncPair 同步一对源目目录
+// syncPair 同步一对源目目录（同实例服务端直拷，不走离线下载）
+// 语义：按覆盖策略逐文件 FSCopy，调用返回即代表服务端复制完成，
+// 不再提交异步离线任务、不写重试队列，Run 返回就是真实完成。
 func (as *Alissync) syncPair(ctx context.Context, pair PairConfig) error {
 	as.logger.Infof("开始同步: %s -> %s", pair.Src, pair.Dst)
 
@@ -22,7 +25,7 @@ func (as *Alissync) syncPair(ctx context.Context, pair PairConfig) error {
 
 	as.logger.Infof("源目录 %s 共 %d 个文件", pair.Src, len(srcFiles))
 
-	// 收集所有需要同步的文件
+	// 按覆盖策略过滤出需要复制的文件
 	var toSync []alist.AlistPath
 	for _, f := range srcFiles {
 		dstPath := replacePrefix(f.FullPath, pair.Src, pair.Dst)
@@ -40,18 +43,7 @@ func (as *Alissync) syncPair(ctx context.Context, pair PairConfig) error {
 			continue
 		}
 
-		// 获取源文件直链
-		detail, err := as.client.FSGet(ctx, f.FullPath)
-		if err != nil {
-			as.logger.Warnf("获取文件直链失败 %s: %v", f.FullPath, err)
-			continue
-		}
-		if detail.RawURL == "" {
-			as.logger.Warnf("文件 %s 无直链，跳过", f.FullPath)
-			continue
-		}
-
-		toSync = append(toSync, *detail)
+		toSync = append(toSync, f)
 	}
 
 	if len(toSync) == 0 {
@@ -69,55 +61,51 @@ func (as *Alissync) syncPair(ctx context.Context, pair PairConfig) error {
 		}
 	}
 
-	// 逐个提交同步任务
+	// 逐个服务端直拷，同步等待结果
+	var copied, skipped int
+	var errs []error
 	for _, f := range toSync {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
 		dstPath := replacePrefix(f.FullPath, pair.Src, pair.Dst)
+		srcDir := dstDirFromPath(f.FullPath)
+		srcName := fileNameFromPath(f.FullPath)
 		dstDir := dstDirFromPath(dstPath)
-		fileName := fileNameFromPath(dstPath)
+		dstName := fileNameFromPath(dstPath)
 
-		taskID, err := as.client.FSPut(ctx, dstDir, []alist.FSPutFile{
-			{Path: fileName, URL: f.RawURL},
-		})
-		if err != nil {
-			as.logger.Errorf("提交同步任务失败 %s -> %s: %v", f.FullPath, dstPath, err)
-
-			task := &SyncTask{
-				ID:           dstPath,
-				SyncConfigID: as.config.ID,
-				SrcPath:      f.FullPath,
-				DstPath:      dstPath,
-				RawURL:       f.RawURL,
-				State:        "failed",
-				Attempts:     1,
-				LastError:    err.Error(),
-				NextRetryAt:  as.daemon.calcNextRetry(1),
-				CreatedAt:    time.Now(),
+		// 目标已存在且策略允许覆盖时，先删旧目标，避免服务端撞名自动改名
+		if existing, err := as.client.FSGetNoRetry(ctx, dstPath); err == nil && existing != nil {
+			if err := as.client.FSRemove(ctx, dstDir, []string{dstName}); err != nil {
+				as.logger.Errorf("删除已存在的目标 %s 失败: %v", dstPath, err)
+				errs = append(errs, fmt.Errorf("删除已存在的目标 %s 失败: %w", dstPath, err))
+				continue
 			}
-			as.queue.Save(task)
-			as.daemon.AddTask(task)
+		}
+
+		if err := as.client.FSCopy(ctx, srcDir, dstDir, []string{srcName}); err != nil {
+			if alist.IsNotFound(err) {
+				as.logger.Warnf("源文件已消失，跳过: %s", f.FullPath)
+				skipped++
+				continue
+			}
+			as.logger.Errorf("复制失败 %s -> %s: %v", f.FullPath, dstPath, err)
+			errs = append(errs, fmt.Errorf("复制 %s -> %s 失败: %w", f.FullPath, dstPath, err))
 			continue
 		}
-
-		task := &SyncTask{
-			ID:           dstPath,
-			SyncConfigID: as.config.ID,
-			SrcPath:      f.FullPath,
-			DstPath:      dstPath,
-			RawURL:       f.RawURL,
-			AlistTaskID:  taskID,
-			State:        "pending",
-			Attempts:     0,
-			CreatedAt:    time.Now(),
-		}
-		as.queue.Save(task)
-		as.daemon.AddTask(task)
-		as.logger.Infof("同步任务已提交: %s -> %s (task: %s)", f.FullPath, dstPath, taskID)
+		copied++
+		as.logger.Infof("已复制: %s -> %s", f.FullPath, dstPath)
 	}
 
+	as.logger.Infof("同步完成: %s -> %s，复制=%d 跳过=%d 失败=%d", pair.Src, pair.Dst, copied, skipped, len(errs))
+	if len(errs) > 0 {
+		msgs := make([]string, 0, len(errs))
+		for _, e := range errs {
+			msgs = append(msgs, e.Error())
+		}
+		return fmt.Errorf("%d 个文件复制失败: %s", len(errs), strings.Join(msgs, "; "))
+	}
 	return nil
 }
 

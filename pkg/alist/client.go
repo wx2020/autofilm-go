@@ -885,6 +885,20 @@ func (c *AlistClient) FSMove(ctx context.Context, srcDir, dstDir string, names [
 	return err
 }
 
+// FSCopy 在同一个 OpenList/Alist 实例内服务端直拷文件或目录。
+// 同 FSMove 入参形态：POST /api/fs/copy {src_dir, dst_dir, names}。
+// 跨存储复制由服务端自己执行，不需要源直链、不走离线下载。
+func (c *AlistClient) FSCopy(ctx context.Context, srcDir, dstDir string, names []string) error {
+	req := struct {
+		SrcDir string   `json:"src_dir"`
+		DstDir string   `json:"dst_dir"`
+		Names  []string `json:"names"`
+	}{SrcDir: srcDir, DstDir: dstDir, Names: names}
+	jsonData, _ := json.Marshal(req)
+	_, err := c.doRequestLong(ctx, "POST", "/api/fs/copy", jsonData)
+	return err
+}
+
 // FSRename 重命名文件或目录。
 func (c *AlistClient) FSRename(ctx context.Context, path, name string) error {
 	req := struct {
