@@ -147,8 +147,12 @@ func (d *RetryDaemon) checkPendingTask(ctx context.Context, task *SyncTask) {
 		return
 	}
 
-	switch info.State {
-	case "succeeded":
+	// v4 任务状态为 tache 数字（2=成功），用 TaskTerminal 兼容新旧两种形态
+	terminal, success := alist.TaskTerminal(info.State)
+	if !terminal {
+		return
+	}
+	if success {
 		if _, err := d.client.FSGet(ctx, task.DstPath); err != nil {
 			d.logger.Warnf("Alist 报告成功但目标文件不存在: %s, 错误: %v", task.DstPath, err)
 			task.Attempts++
@@ -167,8 +171,7 @@ func (d *RetryDaemon) checkPendingTask(ctx context.Context, task *SyncTask) {
 		}
 		d.logger.Infof("同步任务完成: %s -> %s", task.SrcPath, task.DstPath)
 		d.RemoveTask(task.ID)
-
-	case "failed", "canceled":
+	} else {
 		task.Attempts++
 		task.LastError = info.Error
 		if task.LastError == "" {

@@ -725,14 +725,17 @@ func (c *AlistClient) AddOfflineDownload(ctx context.Context, dstDir string, url
 }
 
 // TaskInfoData 任务状态信息
-// OpenList v4 info 接口返回 data 数组首元素；state 以字符串为主（succeeded/failed/canceled + running），兼容数字形态
+// OpenList v4 info 接口返回 data 数组首元素；state 以 tache 数字为主
+// （0pending/1running/2succeeded/4canceled/7failed），字符串形态兼容。
+// undone/done 列表接口字段一致（含 progress 浮点、total_bytes、error）。
 type TaskInfoData struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	State    string `json:"state"`
-	Status   string `json:"status"`
-	Progress int    `json:"progress"`
-	Error    string `json:"error"`
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	State      string  `json:"state"`
+	Status     string  `json:"status"`
+	Progress   float64 `json:"progress"`
+	TotalBytes int64   `json:"total_bytes"`
+	Error      string  `json:"error"`
 }
 
 // UnmarshalJSON 兼容 state 为 string 或 number 两种形态
@@ -773,7 +776,7 @@ func (c *AlistClient) taskAction(ctx context.Context, taskType, action, taskID s
 // 声明返回 data 数组，取首元素；老端点做最终回退
 func (c *AlistClient) TaskInfo(ctx context.Context, taskID string) (*TaskInfoData, error) {
 	var lastErr error
-	for _, taskType := range []string{"offline_download", "upload"} {
+	for _, taskType := range []string{"offline_download", "upload", "copy"} {
 		resp, err := c.taskAction(ctx, taskType, "info", taskID)
 		if err != nil {
 			lastErr = err
@@ -797,6 +800,58 @@ func (c *AlistClient) TaskInfo(ctx context.Context, taskID string) (*TaskInfoDat
 	return parseTaskInfo(resp.Data)
 }
 
+// TaskTerminal 判断任务状态是否终态。
+// 兼容 tache 数字（0pending/1running/2succeeded/4canceled/7failed）与英文单词；
+// 未知状态一律视为未终态（继续轮询，宁等不定错判），成功只认明确的完成值。
+func TaskTerminal(state string) (terminal, success bool) {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "2", "succeeded", "success", "finished", "done", "completed":
+		return true, true
+	case "4", "7", "failed", "error", "canceled", "cancelled":
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+// ListTasks 查询某类型任务列表（OpenList v4 后台复制队列接口）。
+// taskType: copy/move/upload/offline_download/decompress 等；
+// done=false 查未完成（undone），true 查已完成（done）。均为 GET，无需传参。
+func (c *AlistClient) ListTasks(ctx context.Context, taskType string, done bool) ([]TaskInfoData, error) {
+	which := "undone"
+	if done {
+		which = "done"
+	}
+	endpoint := fmt.Sprintf("/api/admin/task/%s/%s", taskType, which)
+	url := c.url + endpoint
+
+	if lim := c.rateLimiter.Load(); lim != nil {
+		if err := lim.Wait(ctx); err != nil {
+			return nil, fmt.Errorf("限流等待失败: %w", err)
+		}
+	}
+
+	resp, err := c.httpClient.Get(ctx, url, c.makeHeaders())
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("请求失败 %s，状态码: %d, body: %s", endpoint, resp.StatusCode, snippet(resp.Body))
+	}
+	var apiResp APIResponse
+	if err := json.Unmarshal(resp.Body, &apiResp); err != nil {
+		return nil, fmt.Errorf("解析响应失败 %s: %w", endpoint, err)
+	}
+	if apiResp.Code != 200 {
+		return nil, fmt.Errorf("API错误: %s", apiResp.Message)
+	}
+	var list []TaskInfoData
+	if err := json.Unmarshal(apiResp.Data, &list); err != nil {
+		return nil, fmt.Errorf("解析任务列表失败: %w", err)
+	}
+	return list, nil
+}
+
 func parseTaskInfo(data json.RawMessage) (*TaskInfoData, error) {
 	// 先按数组解析（v4 声明形态）
 	var arr []TaskInfoData
@@ -813,7 +868,7 @@ func parseTaskInfo(data json.RawMessage) (*TaskInfoData, error) {
 // TaskCancel 取消异步任务（per-type 端点 + 老端点回退）
 func (c *AlistClient) TaskCancel(ctx context.Context, taskID string) error {
 	var lastErr error
-	for _, taskType := range []string{"offline_download", "upload"} {
+	for _, taskType := range []string{"offline_download", "upload", "copy"} {
 		if _, err := c.taskAction(ctx, taskType, "cancel", taskID); err == nil {
 			return nil
 		} else {
@@ -833,7 +888,7 @@ func (c *AlistClient) TaskCancel(ctx context.Context, taskID string) error {
 // TaskRetry 重试失败的异步任务（per-type 端点 + 老端点回退）
 func (c *AlistClient) TaskRetry(ctx context.Context, taskID string) error {
 	var lastErr error
-	for _, taskType := range []string{"offline_download", "upload"} {
+	for _, taskType := range []string{"offline_download", "upload", "copy"} {
 		if _, err := c.taskAction(ctx, taskType, "retry", taskID); err == nil {
 			return nil
 		} else {
@@ -888,6 +943,8 @@ func (c *AlistClient) FSMove(ctx context.Context, srcDir, dstDir string, names [
 // FSCopy 在同一个 OpenList/Alist 实例内服务端直拷文件或目录。
 // 同 FSMove 入参形态：POST /api/fs/copy {src_dir, dst_dir, names}。
 // 跨存储复制由服务端自己执行，不需要源直链、不走离线下载。
+// 同步语义：code 200 即复制完成（实测同盘 1.4GB 约 6s 返回），
+// 调用方只等状态码，不做任务轮询。
 func (c *AlistClient) FSCopy(ctx context.Context, srcDir, dstDir string, names []string) error {
 	req := struct {
 		SrcDir string   `json:"src_dir"`
