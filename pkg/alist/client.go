@@ -772,6 +772,16 @@ func (c *AlistClient) taskAction(ctx context.Context, taskType, action, taskID s
 	return c.doRequest(ctx, "POST", endpoint, []byte("{}"))
 }
 
+// TaskInfoByType 按指定类型查任务状态（/api/admin/task/{type}/info?tid=），
+// 已知类型时直达，避免通用 TaskInfo 逐类型试错的无效调用。
+func (c *AlistClient) TaskInfoByType(ctx context.Context, taskType, taskID string) (*TaskInfoData, error) {
+	resp, err := c.taskAction(ctx, taskType, "info", taskID)
+	if err != nil {
+		return nil, err
+	}
+	return parseTaskInfo(resp.Data)
+}
+
 // TaskInfo 查询异步任务状态（优先 offline_download，兼容 upload）
 // 声明返回 data 数组，取首元素；老端点做最终回退
 func (c *AlistClient) TaskInfo(ctx context.Context, taskID string) (*TaskInfoData, error) {
@@ -812,6 +822,58 @@ func TaskTerminal(state string) (terminal, success bool) {
 	default:
 		return false, false
 	}
+}
+
+// GetCopyTaskThreads 读取 OpenList 后端 copy_task_threads_num（管理设置）。
+// 需管理员权限；失败返回错误，调用方回退默认值。
+func (c *AlistClient) GetCopyTaskThreads(ctx context.Context) (int, error) {
+	url := c.url + "/api/admin/setting/list"
+
+	if lim := c.rateLimiter.Load(); lim != nil {
+		if err := lim.Wait(ctx); err != nil {
+			return 0, fmt.Errorf("限流等待失败: %w", err)
+		}
+	}
+
+	resp, err := c.httpClient.Get(ctx, url, c.makeHeaders())
+	if err != nil {
+		return 0, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("请求失败 /api/admin/setting/list，状态码: %d, body: %s",
+			resp.StatusCode, snippet(resp.Body))
+	}
+	var apiResp APIResponse
+	if err := json.Unmarshal(resp.Body, &apiResp); err != nil {
+		return 0, fmt.Errorf("解析设置列表失败: %w", err)
+	}
+	if apiResp.Code != 200 {
+		return 0, fmt.Errorf("API错误: %s", apiResp.Message)
+	}
+	var settings []struct {
+		Key   string      `json:"key"`
+		Value interface{} `json:"value"`
+	}
+	if err := json.Unmarshal(apiResp.Data, &settings); err != nil {
+		return 0, fmt.Errorf("解析设置项失败: %w", err)
+	}
+	for _, s := range settings {
+		if s.Key != "copy_task_threads_num" {
+			continue
+		}
+		switch v := s.Value.(type) {
+		case float64:
+			return int(v), nil
+		case string:
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+				return n, nil
+			}
+			return 0, fmt.Errorf("copy_task_threads_num 非法: %q", v)
+		default:
+			return 0, fmt.Errorf("copy_task_threads_num 类型未知: %T", v)
+		}
+	}
+	return 0, fmt.Errorf("未找到 copy_task_threads_num")
 }
 
 // ListTasks 查询某类型任务列表（OpenList v4 后台复制队列接口）。

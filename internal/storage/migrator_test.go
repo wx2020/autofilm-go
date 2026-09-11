@@ -38,6 +38,50 @@ func TestMigrationsAreReplaySafe(t *testing.T) {
 	}
 }
 
+// TestSyncTaskDeleteSrcRoundTrip V004 在老库升级 + 新库直建两种路径下 delete_src 读写正常
+func TestSyncTaskDeleteSrcRoundTrip(t *testing.T) {
+	// 老库形态：建 V003 版 sync_tasks（无 delete_src 列），只跑 V004
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "old.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE sync_tasks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, sync_config_id INTEGER NOT NULL DEFAULT 0,
+		config_uid TEXT NOT NULL DEFAULT '', src_path TEXT NOT NULL, dst_path TEXT NOT NULL UNIQUE,
+		state TEXT NOT NULL DEFAULT 'pending', alist_task_id TEXT NOT NULL DEFAULT '',
+		attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
+		next_retry_at DATETIME, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	data, err := migrationFiles.ReadFile("migrations/V004__sync_task_delete_src.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(string(data)); err != nil {
+		t.Fatalf("V004 在老库升级失败: %v", err)
+	}
+	s := NewStore(db, make([]byte, 32))
+	if err := s.UpsertSyncTask(&SyncTaskRow{
+		SrcPath: "/s/a.mkv", DstPath: "/d/a.mkv", State: "failed", DeleteSrc: true,
+	}); err != nil {
+		t.Fatalf("UpsertSyncTask: %v", err)
+	}
+	got, err := s.GetSyncTaskByDstPath("/d/a.mkv")
+	if err != nil {
+		t.Fatalf("GetSyncTaskByDstPath: %v", err)
+	}
+	if !got.DeleteSrc {
+		t.Fatal("delete_src 未持久化")
+	}
+	all, err := s.ListAllSyncTasks()
+	if err != nil || len(all) != 1 || !all[0].DeleteSrc {
+		t.Fatalf("ListAllSyncTasks: %v %+v", err, all)
+	}
+}
+
 func TestModuleConfigEncryptedRoundTrip(t *testing.T) {
 	s := testStore(t)
 	cfg := map[string]interface{}{"id": "demo", "token": "top-secret", "cron": "0 0 * * * *"}

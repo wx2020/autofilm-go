@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/akimio/autofilm/pkg/alist"
+	"github.com/sirupsen/logrus"
 )
 
 // 注意 /api/fs/copy 是异步接口：code 200 仅表示已提交（服务端日志里
@@ -73,38 +75,53 @@ func (as *Alissync) syncPair(ctx context.Context, pair PairConfig) error {
 		}
 	}
 
-	// 逐个服务端直拷，同步等待结果
+	// worker 数跟随后端 copy_task_threads_num：开几个配额就跑几个并发，
+	// 背压由服务端说了算；失败任务入守护队列按退避重试，不在本轮死磕。
+	workers := as.resolveWorkers(ctx)
+	jobs := make(chan alist.AlistPath, workers*2)
+	var mu sync.Mutex
 	var copied, skipped int
 	var errs []error
-	for _, f := range toSync {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
 
-		dstPath := replacePrefix(f.FullPath, pair.Src, pair.Dst)
-		srcDir := dstDirFromPath(f.FullPath)
-		srcName := fileNameFromPath(f.FullPath)
-		dstDir := dstDirFromPath(dstPath)
-		dstName := fileNameFromPath(dstPath)
-
-		// 目标已存在且策略允许覆盖时，先删旧目标，避免服务端撞名自动改名
-		if existing, err := as.client.FSGetNoRetry(ctx, dstPath); err == nil && existing != nil {
-			if err := as.client.FSRemove(ctx, dstDir, []string{dstName}); err != nil {
-				as.logger.Errorf("删除已存在的目标 %s 失败: %v", dstPath, err)
-				errs = append(errs, fmt.Errorf("删除已存在的目标 %s 失败: %w", dstPath, err))
-				continue
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for f := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				ok, skip, failErr := as.copyOne(ctx, pair, f)
+				mu.Lock()
+				switch {
+				case ok:
+					copied++
+					// 复制成功但删源失败等附带错误：照样记错告警，不丢
+					if failErr != nil {
+						errs = append(errs, failErr)
+					}
+				case skip:
+					skipped++
+				default:
+					errs = append(errs, failErr)
+				}
+				mu.Unlock()
 			}
+		}()
+	}
+dispatch:
+	for _, f := range toSync {
+		select {
+		case jobs <- f:
+		case <-ctx.Done():
+			break dispatch
 		}
-
-		// 单文件本轮直重试：瞬时失败（驱动抖动/提交 EOF）当场重提，
-		// 耗尽才记错留待下轮 cron，不把一次抖动拖成一整轮等待。
-		if ok, skip := as.copyOneWithRetry(ctx, f.FullPath, srcDir, srcName, dstPath, dstDir, dstName, f.Size); ok {
-			copied++
-		} else if skip {
-			skipped++
-		} else {
-			errs = append(errs, fmt.Errorf("复制 %s -> %s 失败（已重试），留待下轮", f.FullPath, dstPath))
-		}
+	}
+	close(jobs)
+	wg.Wait()
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
 	as.logger.Infof("同步完成: %s -> %s，复制=%d 跳过=%d 失败=%d", pair.Src, pair.Dst, copied, skipped, len(errs))
@@ -118,50 +135,86 @@ func (as *Alissync) syncPair(ctx context.Context, pair PairConfig) error {
 	return nil
 }
 
-// copyMaxAttempts 单文件本轮直重试次数；copyRetryBackoff 每次重试前等待
-const copyMaxAttempts = 3
-const copyRetryBackoff = 10 * time.Second
+// copyOne 单文件复制（单次提交 + 状态裁决），返回 (成功, 跳过, 失败错误)。
+// 源消失记跳过；失败不重试——由调用方入守护队列按退避重试。
+func (as *Alissync) copyOne(ctx context.Context, pair PairConfig, f alist.AlistPath) (bool, bool, error) {
+	dstPath := replacePrefix(f.FullPath, pair.Src, pair.Dst)
+	srcDir := dstDirFromPath(f.FullPath)
+	srcName := fileNameFromPath(f.FullPath)
+	dstDir := dstDirFromPath(dstPath)
+	dstName := fileNameFromPath(dstPath)
+	fileName := fileNameFromPath(f.FullPath)
 
-// copyOneWithRetry 单文件复制（含本轮直重试），返回 (成功, 跳过)。
-// 源消失记跳过；终态失败/等待丢失先清残留再按退避重提，耗尽返回失败。
-func (as *Alissync) copyOneWithRetry(ctx context.Context, srcFullPath, srcDir, srcName, dstPath, dstDir, dstName string, wantSize int64) (bool, bool) {
-	fileName := fileNameFromPath(srcFullPath)
-	for attempt := 1; attempt <= copyMaxAttempts; attempt++ {
-		if ctx.Err() != nil {
-			return false, false
+	// 前端进度条：提交即 0%，完成/失败/跳过清掉（defer 兜底崩溃残留由 TTL 清理）
+	SetCopyProgress(as.config.ID, fileName, 0)
+	defer ClearCopyProgress(as.config.ID, fileName)
+
+	// 目标已存在且策略允许覆盖时，先删旧目标，避免服务端撞名自动改名
+	if existing, err := as.client.FSGetNoRetry(ctx, dstPath); err == nil && existing != nil {
+		if err := as.client.FSRemove(ctx, dstDir, []string{dstName}); err != nil {
+			return false, false, fmt.Errorf("删除已存在的目标 %s 失败: %w", dstPath, err)
 		}
-		if attempt > 1 {
-			as.logger.Infof("重试复制 %s -> %s（第 %d/%d 次）", srcFullPath, dstPath, attempt, copyMaxAttempts)
-			select {
-			case <-ctx.Done():
-				return false, false
-			case <-time.After(copyRetryBackoff):
-			}
-		}
-		if err := as.client.FSCopy(ctx, srcDir, dstDir, []string{srcName}); err != nil {
-			if alist.IsNotFound(err) {
-				as.logger.Warnf("源文件已消失，跳过: %s", srcFullPath)
-				return false, true
-			}
-			// 歧义失败：提交可能已受理，看目标裁决
-			if as.waitCopyDone(ctx, dstPath, fileName, wantSize) {
-				as.logger.Infof("已复制（状态裁决）: %s -> %s", srcFullPath, dstPath)
-				return true, false
-			}
-			as.removePartial(ctx, dstPath)
-			as.logger.Warnf("复制 %s -> %s 第 %d 次未完成，已清残留", srcFullPath, dstPath, attempt)
-			continue
-		}
-		// code 200 仅表示已提交：看目标裁决
-		if as.waitCopyDone(ctx, dstPath, fileName, wantSize) {
-			as.logger.Infof("已复制: %s -> %s", srcFullPath, dstPath)
-			return true, false
-		}
-		as.removePartial(ctx, dstPath)
-		as.logger.Warnf("复制 %s -> %s 第 %d 次未完成，已清残留", srcFullPath, dstPath, attempt)
 	}
-	as.logger.Errorf("复制 %s -> %s 失败（已重试 %d 次）", srcFullPath, dstPath, copyMaxAttempts)
-	return false, false
+
+	if err := as.client.FSCopy(ctx, srcDir, dstDir, []string{srcName}); err != nil {
+		if alist.IsNotFound(err) {
+			as.logger.Warnf("源文件已消失，跳过: %s", f.FullPath)
+			return false, true, nil
+		}
+		// 歧义失败：提交可能已受理，看目标裁决
+		if as.waitCopyDone(ctx, dstPath, fileName, f.Size) {
+			as.logger.Infof("已复制（状态裁决）: %s -> %s", f.FullPath, dstPath)
+			return as.afterCopied(ctx, pair, f.FullPath, dstPath)
+		}
+		as.enqueueFailed(ctx, pair, f.FullPath, dstPath, err)
+		return false, false, fmt.Errorf("复制 %s -> %s 失败（已入重试队列）: %w", f.FullPath, dstPath, err)
+	}
+	// code 200 仅表示已提交：看目标裁决
+	if as.waitCopyDone(ctx, dstPath, fileName, f.Size) {
+		as.logger.Infof("已复制: %s -> %s", f.FullPath, dstPath)
+		return as.afterCopied(ctx, pair, f.FullPath, dstPath)
+	}
+	as.enqueueFailed(ctx, pair, f.FullPath, dstPath, fmt.Errorf("目标校验不通过"))
+	return false, false, fmt.Errorf("复制 %s -> %s 未完成（已入重试队列）", f.FullPath, dstPath)
+}
+
+// afterCopied 复制成功后收尾：delete_src 开启则删源。
+// 删源失败记错（源残留，下轮按覆盖策略自然跳过，不丢数据）。
+func (as *Alissync) afterCopied(ctx context.Context, pair PairConfig, srcFullPath, dstPath string) (bool, bool, error) {
+	if !pair.DeleteSrc {
+		return true, false, nil
+	}
+	if err := as.client.FSRemove(ctx, dstDirFromPath(srcFullPath), []string{fileNameFromPath(srcFullPath)}); err != nil {
+		if alist.IsNotFound(err) {
+			return true, false, nil
+		}
+		return true, false, fmt.Errorf("已复制但删除源 %s 失败: %w", srcFullPath, err)
+	}
+	as.logger.Infof("已删除源: %s", srcFullPath)
+	return true, false, nil
+}
+
+// enqueueFailed 失败任务入守护队列，按指数退避重试
+func (as *Alissync) enqueueFailed(ctx context.Context, pair PairConfig, srcFullPath, dstPath string, err error) {
+	as.removePartial(ctx, dstPath)
+	task := &SyncTask{
+		ID:           dstPath,
+		SyncConfigID: as.config.ID,
+		SrcPath:      srcFullPath,
+		DstPath:      dstPath,
+		State:        "failed",
+		Attempts:     1,
+		LastError:    err.Error(),
+		DeleteSrc:    pair.DeleteSrc,
+		NextRetryAt:  as.daemon.calcNextRetry(1),
+		CreatedAt:    time.Now(),
+	}
+	if qerr := as.queue.Save(task); qerr != nil {
+		as.logger.Errorf("保存重试任务失败 %s: %v", dstPath, qerr)
+		return
+	}
+	as.daemon.AddTask(task)
+	as.logger.Infof("失败任务已入重试队列: %s", dstPath)
 }
 
 // waitCopyDone 等复制完成：只看 undone/done/info 三接口与目标状态，不设墙钟超时。
@@ -172,8 +225,14 @@ func (as *Alissync) copyOneWithRetry(ctx context.Context, srcFullPath, srcDir, s
 //   - 任务出现过、随后两表皆无且目标未就绪，连续达 copyMissLimit 轮 → 判丢失；
 //   - 从未见过任务只管等（快拷可能不建任务）；退出只看三接口与 ctx 取消。
 func (as *Alissync) waitCopyDone(ctx context.Context, dstPath, fileName string, wantSize int64) bool {
+	return waitCopyDoneWith(ctx, as.client, as.logger, as.config.ID, dstPath, fileName, wantSize)
+}
+
+// waitCopyDoneWith 等复制完成（独立函数，daemon 重试与 worker 共用）：
+// 只看 undone/done/info 三接口与目标状态，不设墙钟超时，详见方法注释。
+func waitCopyDoneWith(ctx context.Context, client *alist.AlistClient, logger *logrus.Logger, configID, dstPath, fileName string, wantSize int64) bool {
 	checkDest := func() bool {
-		existing, err := as.client.FSGetNoRetry(ctx, dstPath)
+		existing, err := client.FSGetNoRetry(ctx, dstPath)
 		if err != nil || existing == nil {
 			return false
 		}
@@ -187,7 +246,7 @@ func (as *Alissync) waitCopyDone(ctx context.Context, dstPath, fileName string, 
 	}
 
 	findInList := func(done bool) *alist.TaskInfoData {
-		tasks, err := as.client.ListTasks(ctx, "copy", done)
+		tasks, err := client.ListTasks(ctx, "copy", done)
 		if err != nil {
 			return nil
 		}
@@ -198,6 +257,11 @@ func (as *Alissync) waitCopyDone(ctx context.Context, dstPath, fileName string, 
 		}
 		return nil
 	}
+
+	reportProgress := func(p float64) {
+		SetCopyProgress(configID, fileName, p)
+	}
+	reportProgress(0)
 
 	var taskID string
 	boundLogged, everBound, missCount := false, false, 0
@@ -211,12 +275,12 @@ func (as *Alissync) waitCopyDone(ctx context.Context, dstPath, fileName string, 
 			if checkDest() {
 				return true
 			}
-			// 已绑定 tid：info 精确轮询
+			// 已绑定 tid：info?tid= 精确轮询（copy 类型直达，不逐类型试错）
 			if taskID != "" {
-				info, err := as.client.TaskInfo(ctx, taskID)
+				info, err := client.TaskInfoByType(ctx, "copy", taskID)
 				if err != nil {
 					if alist.IsNotFound(err) {
-						as.logger.Debugf("复制任务 %s 已不在后台（被清理），回列表重绑", taskID)
+						logger.Debugf("复制任务 %s 已不在后台（被清理），回列表重绑", taskID)
 						taskID = ""
 						continue
 					}
@@ -224,13 +288,14 @@ func (as *Alissync) waitCopyDone(ctx context.Context, dstPath, fileName string, 
 				}
 				if terminal, success := alist.TaskTerminal(info.State); terminal {
 					if !success {
-						as.logger.Errorf("复制任务失败 %s：%s %s", taskID, info.State, info.Error)
-						as.removePartial(ctx, dstPath)
+						logger.Errorf("复制任务失败 %s：%s %s", taskID, info.State, info.Error)
+						removePartialWith(ctx, client, logger, dstPath)
 						return false
 					}
 					return checkDest()
 				}
-				as.logger.Debugf("复制进行中 %s：%.1f%%", dstPath, info.Progress)
+				logger.Debugf("复制进行中 %s：%.1f%%", dstPath, info.Progress)
+				reportProgress(info.Progress)
 				continue
 			}
 			// 未绑定：undone 绑新任务，undone 无则查 done 定性
@@ -239,7 +304,7 @@ func (as *Alissync) waitCopyDone(ctx context.Context, dstPath, fileName string, 
 				everBound = true
 				missCount = 0
 				if !boundLogged {
-					as.logger.Debugf("复制 %s 绑定后台任务 %s (%s)", dstPath, task.ID, task.Name)
+					logger.Debugf("复制 %s 绑定后台任务 %s (%s)", dstPath, task.ID, task.Name)
 					boundLogged = true
 				}
 				continue
@@ -247,8 +312,8 @@ func (as *Alissync) waitCopyDone(ctx context.Context, dstPath, fileName string, 
 			if task := findInList(true); task != nil {
 				if terminal, success := alist.TaskTerminal(task.State); terminal {
 					if !success {
-						as.logger.Errorf("复制任务失败 %s：%s %s", task.ID, task.State, task.Error)
-						as.removePartial(ctx, dstPath)
+						logger.Errorf("复制任务失败 %s：%s %s", task.ID, task.State, task.Error)
+						removePartialWith(ctx, client, logger, dstPath)
 						return false
 					}
 					return checkDest()
@@ -261,7 +326,7 @@ func (as *Alissync) waitCopyDone(ctx context.Context, dstPath, fileName string, 
 			if everBound {
 				missCount++
 				if missCount >= copyMissLimit {
-					as.logger.Errorf("复制任务丢失 %s（连续 %d 轮两表无记录），留待下轮", dstPath, missCount)
+					logger.Errorf("复制任务丢失 %s（连续 %d 轮两表无记录），留待下轮", dstPath, missCount)
 					return false
 				}
 			}
@@ -273,13 +338,17 @@ func (as *Alissync) waitCopyDone(ctx context.Context, dstPath, fileName string, 
 // 安全前提：走到等待的复制，其目标要么本就不存在，要么覆盖前已删旧文件，
 // 因此现存目标只可能是本次残留；清掉后 never/if_newer 下轮才能重新触发复制。
 func (as *Alissync) removePartial(ctx context.Context, dstPath string) {
-	if err := as.client.FSRemove(ctx, dstDirFromPath(dstPath), []string{fileNameFromPath(dstPath)}); err != nil {
+	removePartialWith(ctx, as.client, as.logger, dstPath)
+}
+
+func removePartialWith(ctx context.Context, client *alist.AlistClient, logger *logrus.Logger, dstPath string) {
+	if err := client.FSRemove(ctx, dstDirFromPath(dstPath), []string{fileNameFromPath(dstPath)}); err != nil {
 		if !alist.IsNotFound(err) {
-			as.logger.Warnf("清理残留目标 %s 失败: %v", dstPath, err)
+			logger.Warnf("清理残留目标 %s 失败: %v", dstPath, err)
 		}
 		return
 	}
-	as.logger.Infof("已清理失败复制的残留目标: %s", dstPath)
+	logger.Infof("已清理失败复制的残留目标: %s", dstPath)
 }
 
 // listRecursive 递归列出目录下所有文件

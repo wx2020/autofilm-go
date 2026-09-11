@@ -721,6 +721,7 @@ func parseAlistSyncConfig(m map[string]interface{}) (*alistsync.Config, error) {
 		Token:      getString(m, "token"),
 		WaitTime:   getFloat64(m, "wait_time"),
 		QPSLimit:   getInt(m, "qps_limit"),
+		MaxWorkers: getInt(m, "max_workers"),
 		Cron:       getString(m, "cron"),
 	}
 

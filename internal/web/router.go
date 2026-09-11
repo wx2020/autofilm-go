@@ -49,6 +49,7 @@ func (s *Server) newRouter() http.Handler {
 		r.Post("/alist/test", s.handleAlistTest)
 		r.Get("/modules", s.handleListModules)
 		r.Get("/sync/queue", s.handleGetSyncQueue)
+		r.Get("/sync/active", s.handleSyncActive)
 		r.Get("/logs", s.handleGetLogs)
 		r.Get("/logs/stream", s.handleLogStream)
 		r.Get("/runs", s.handleTaskRuns)
