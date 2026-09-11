@@ -227,6 +227,48 @@ func (d *RetryDaemon) checkRetryTask(ctx context.Context, task *SyncTask) {
 
 	d.logger.Infof("正在重试同步任务: %s -> %s (第 %d 次)", task.SrcPath, task.DstPath, task.Attempts+1)
 
+	// 直拷任务（无 AlistTaskID、无 RawURL）：直接 FSCopy 重提 + 状态裁决
+	if task.AlistTaskID == "" && task.RawURL == "" {
+		dstDir := dstDirFromPath(task.DstPath)
+		srcDir := dstDirFromPath(task.SrcPath)
+		srcName := fileNameFromPath(task.SrcPath)
+		if err := d.client.FSCopy(ctx, srcDir, dstDir, []string{srcName}); err != nil {
+			if alist.IsNotFound(err) {
+				d.logger.Infof("重试源已消失，任务完成（无待同步）: %s", task.SrcPath)
+				task.State = "succeeded"
+				task.LastError = ""
+				d.queue.Save(task)
+				d.RemoveTask(task.ID)
+				return
+			}
+			d.retryFailed(ctx, task, err)
+			return
+		}
+		fileName := fileNameFromPath(task.DstPath)
+		var wantSize int64
+		if src, err := d.client.FSGetNoRetry(ctx, task.SrcPath); err == nil && src != nil {
+			wantSize = src.Size
+		}
+		if waitCopyDoneWith(ctx, d.client, d.logger, task.SyncConfigID, task.DstPath, fileName, wantSize) {
+			d.logger.Infof("重试同步任务完成: %s -> %s", task.SrcPath, task.DstPath)
+			// delete_src：成功后删源；删失败不改成功结论，只告警（源残留下轮自然跳过）
+			if task.DeleteSrc {
+				if err := d.client.FSRemove(ctx, dstDirFromPath(task.SrcPath), []string{fileNameFromPath(task.SrcPath)}); err != nil && !alist.IsNotFound(err) {
+					d.logger.Errorf("已复制但删除源 %s 失败: %v", task.SrcPath, err)
+				} else {
+					d.logger.Infof("已删除源: %s", task.SrcPath)
+				}
+			}
+			task.State = "succeeded"
+			task.LastError = ""
+			d.queue.Save(task)
+			d.RemoveTask(task.ID)
+			return
+		}
+		d.retryFailed(ctx, task, fmt.Errorf("目标校验不通过"))
+		return
+	}
+
 	// 失败任务（首次 FSPut 即失败）无 AlistTaskID，直接重新提交离线下载
 	if task.AlistTaskID == "" || task.RawURL == "" {
 		if task.RawURL == "" {
@@ -284,6 +326,23 @@ func (d *RetryDaemon) checkRetryTask(ctx context.Context, task *SyncTask) {
 	if err := d.queue.Save(task); err != nil {
 		d.logger.Errorf("保存任务状态失败 %s: %v", task.ID, err)
 	}
+}
+
+// retryFailed 直拷重试失败：清残留、计数、退避，超限进死信
+func (d *RetryDaemon) retryFailed(ctx context.Context, task *SyncTask, err error) {
+	removePartialWith(ctx, d.client, d.logger, task.DstPath)
+	task.Attempts++
+	task.LastError = err.Error()
+	task.NextRetryAt = d.calcNextRetry(task.Attempts)
+	if d.isMaxAttemptsExceeded(task) {
+		task.State = "dead_letter"
+		d.logger.Errorf("同步任务超过最大重试次数: %s", task.SrcPath)
+	} else {
+		task.State = "failed"
+		d.logger.Infof("同步任务失败，将在 %v 后重试 (第 %d 次): %s",
+			time.Until(task.NextRetryAt), task.Attempts, task.SrcPath)
+	}
+	d.queue.Save(task)
 }
 
 func (d *RetryDaemon) isMaxAttemptsExceeded(task *SyncTask) bool {

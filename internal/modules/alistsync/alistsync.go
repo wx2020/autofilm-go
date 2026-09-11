@@ -38,6 +38,7 @@ type Config struct {
 	Retry      RetryConfig
 	WaitTime   float64
 	QPSLimit   int // 对 OpenList API 的限流（次/秒），0 表示不限流
+	MaxWorkers int // 同步 worker 数（并发复制数）；0 表示跟随后端 copy_task_threads_num
 	Cron       string
 }
 
@@ -84,9 +85,32 @@ func New(cfg *Config) (*Alissync, error) {
 	return as, nil
 }
 
+// fallbackWorkers 后端不可读时的默认 worker 数
+const fallbackWorkers = 3
+
+// resolveWorkers 确定同步 worker 数：显式配置优先，否则跟随后端
+// copy_task_threads_num，后端不可读（无管理员权限等）回退默认值。
+func (as *Alissync) resolveWorkers(ctx context.Context) int {
+	if as.config.MaxWorkers > 0 {
+		return as.config.MaxWorkers
+	}
+	if n, err := as.client.GetCopyTaskThreads(ctx); err != nil {
+		as.logger.Warnf("读取后端 copy_task_threads_num 失败（%v），使用默认 worker 数 %d", err, fallbackWorkers)
+		return fallbackWorkers
+	} else if n > 0 {
+		as.logger.Infof("后端 copy_task_threads_num=%d，启动 %d 个同步 worker", n, n)
+		return n
+	}
+	as.logger.Warnf("后端 copy_task_threads_num 非法，使用默认 worker 数 %d", fallbackWorkers)
+	return fallbackWorkers
+}
+
 // Run 执行同步（服务端直拷，同步完成即真实落盘，不再提交离线任务）
 func (as *Alissync) Run(ctx context.Context) error {
 	as.logger.Infof("开始 Alissync 同步: %s", as.config.ID)
+
+	// 启动守护重试协程（幂等）：worker 失败的任务入队后由它按退避重试
+	as.daemon.Start(ctx)
 
 	// 同步每个 pair
 	for _, pair := range as.config.Pairs {

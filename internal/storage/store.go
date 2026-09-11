@@ -531,15 +531,16 @@ type SyncTaskRow struct {
 	Attempts     int        `json:"attempts"`
 	LastError    string     `json:"last_error"`
 	NextRetryAt  *time.Time `json:"next_retry_at"`
+	DeleteSrc    bool       `json:"delete_src"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 // CreateSyncTask 创建同步任务
 func (s *Store) CreateSyncTask(t *SyncTaskRow) (int64, error) {
-	res, err := s.db.Exec(`INSERT INTO sync_tasks (sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.SyncConfigID, t.ConfigUID, t.SrcPath, t.DstPath, t.State, t.AlistTaskID, t.Attempts, t.LastError, t.NextRetryAt)
+	res, err := s.db.Exec(`INSERT INTO sync_tasks (sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, delete_src)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.SyncConfigID, t.ConfigUID, t.SrcPath, t.DstPath, t.State, t.AlistTaskID, t.Attempts, t.LastError, t.NextRetryAt, t.DeleteSrc)
 	if err != nil {
 		return 0, err
 	}
@@ -548,14 +549,14 @@ func (s *Store) CreateSyncTask(t *SyncTaskRow) (int64, error) {
 
 // UpdateSyncTask 更新同步任务
 func (s *Store) UpdateSyncTask(t *SyncTaskRow) error {
-	_, err := s.db.Exec(`UPDATE sync_tasks SET config_uid=?, state=?, alist_task_id=?, attempts=?, last_error=?, next_retry_at=?, updated_at=CURRENT_TIMESTAMP
-		WHERE id=?`, t.ConfigUID, t.State, t.AlistTaskID, t.Attempts, t.LastError, t.NextRetryAt, t.ID)
+	_, err := s.db.Exec(`UPDATE sync_tasks SET config_uid=?, state=?, alist_task_id=?, attempts=?, last_error=?, next_retry_at=?, delete_src=?, updated_at=CURRENT_TIMESTAMP
+		WHERE id=?`, t.ConfigUID, t.State, t.AlistTaskID, t.Attempts, t.LastError, t.NextRetryAt, t.DeleteSrc, t.ID)
 	return err
 }
 
 // ListSyncTasksByState 按状态列出同步任务
 func (s *Store) ListSyncTasksByState(state string) ([]*SyncTaskRow, error) {
-	rows, err := s.db.Query(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
+	rows, err := s.db.Query(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, delete_src, created_at, updated_at
 		FROM sync_tasks WHERE state = ? ORDER BY created_at`, state)
 	if err != nil {
 		return nil, err
@@ -566,7 +567,7 @@ func (s *Store) ListSyncTasksByState(state string) ([]*SyncTaskRow, error) {
 
 // ListPendingRetryTasks 列出待重试任务（state=failed 且 next_retry_at <= now）
 func (s *Store) ListPendingRetryTasks() ([]*SyncTaskRow, error) {
-	rows, err := s.db.Query(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
+	rows, err := s.db.Query(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, delete_src, created_at, updated_at
 		FROM sync_tasks WHERE state IN ('failed','dead_letter') ORDER BY next_retry_at`)
 	if err != nil {
 		return nil, err
@@ -577,7 +578,7 @@ func (s *Store) ListPendingRetryTasks() ([]*SyncTaskRow, error) {
 
 // ListAllSyncTasks 列出所有同步任务
 func (s *Store) ListAllSyncTasks() ([]*SyncTaskRow, error) {
-	rows, err := s.db.Query(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
+	rows, err := s.db.Query(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, delete_src, created_at, updated_at
 		FROM sync_tasks ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -591,7 +592,7 @@ func scanSyncTasks(rows *sql.Rows) ([]*SyncTaskRow, error) {
 	for rows.Next() {
 		t := &SyncTaskRow{}
 		if err := rows.Scan(&t.ID, &t.SyncConfigID, &t.ConfigUID, &t.SrcPath, &t.DstPath, &t.State, &t.AlistTaskID,
-			&t.Attempts, &t.LastError, &t.NextRetryAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			&t.Attempts, &t.LastError, &t.NextRetryAt, &t.DeleteSrc, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, t)
@@ -601,22 +602,22 @@ func scanSyncTasks(rows *sql.Rows) ([]*SyncTaskRow, error) {
 
 // GetSyncTaskByDstPath 按目标路径查询同步任务
 func (s *Store) GetSyncTaskByDstPath(dstPath string) (*SyncTaskRow, error) {
-	row := s.db.QueryRow(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
+	row := s.db.QueryRow(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, delete_src, created_at, updated_at
 		FROM sync_tasks WHERE dst_path = ?`, dstPath)
 	t := &SyncTaskRow{}
 	if err := row.Scan(&t.ID, &t.SyncConfigID, &t.ConfigUID, &t.SrcPath, &t.DstPath, &t.State, &t.AlistTaskID,
-		&t.Attempts, &t.LastError, &t.NextRetryAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		&t.Attempts, &t.LastError, &t.NextRetryAt, &t.DeleteSrc, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return t, nil
 }
 
 func (s *Store) GetSyncTaskByID(id int64) (*SyncTaskRow, error) {
-	row := s.db.QueryRow(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, created_at, updated_at
+	row := s.db.QueryRow(`SELECT id, sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, delete_src, created_at, updated_at
 		FROM sync_tasks WHERE id = ?`, id)
 	t := &SyncTaskRow{}
 	if err := row.Scan(&t.ID, &t.SyncConfigID, &t.ConfigUID, &t.SrcPath, &t.DstPath, &t.State, &t.AlistTaskID,
-		&t.Attempts, &t.LastError, &t.NextRetryAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		&t.Attempts, &t.LastError, &t.NextRetryAt, &t.DeleteSrc, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -624,8 +625,8 @@ func (s *Store) GetSyncTaskByID(id int64) (*SyncTaskRow, error) {
 
 // UpsertSyncTask 更新或插入同步任务（按 dst_path 匹配，使用原子操作避免竞态）
 func (s *Store) UpsertSyncTask(t *SyncTaskRow) error {
-	_, err := s.db.Exec(`INSERT INTO sync_tasks (sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := s.db.Exec(`INSERT INTO sync_tasks (sync_config_id, config_uid, src_path, dst_path, state, alist_task_id, attempts, last_error, next_retry_at, delete_src)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(dst_path) DO UPDATE SET
 			config_uid=excluded.config_uid,
 			state=excluded.state,
@@ -633,8 +634,9 @@ func (s *Store) UpsertSyncTask(t *SyncTaskRow) error {
 			attempts=excluded.attempts,
 			last_error=excluded.last_error,
 			next_retry_at=excluded.next_retry_at,
+			delete_src=excluded.delete_src,
 			updated_at=CURRENT_TIMESTAMP`,
-		t.SyncConfigID, t.ConfigUID, t.SrcPath, t.DstPath, t.State, t.AlistTaskID, t.Attempts, t.LastError, t.NextRetryAt)
+		t.SyncConfigID, t.ConfigUID, t.SrcPath, t.DstPath, t.State, t.AlistTaskID, t.Attempts, t.LastError, t.NextRetryAt, t.DeleteSrc)
 	return err
 }
 

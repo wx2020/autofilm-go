@@ -26,6 +26,7 @@ type SyncTask struct {
 	State        string    `json:"state"` // pending, running, succeeded, failed, dead_letter
 	Attempts     int       `json:"attempts"`
 	LastError    string    `json:"last_error"`
+	DeleteSrc    bool      `json:"delete_src"`
 	NextRetryAt  time.Time `json:"next_retry_at"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -130,6 +131,7 @@ func (qm *QueueManager) dbSave(store *storage.Store, task *SyncTask) error {
 		Attempts:     task.Attempts,
 		LastError:    task.LastError,
 		NextRetryAt:  &task.NextRetryAt,
+		DeleteSrc:    task.DeleteSrc,
 	})
 }
 
@@ -159,6 +161,7 @@ func syncTaskRowToTask(r *storage.SyncTaskRow) *SyncTask {
 		AlistTaskID:  r.AlistTaskID,
 		Attempts:     r.Attempts,
 		LastError:    r.LastError,
+		DeleteSrc:    r.DeleteSrc,
 		CreatedAt:    r.CreatedAt,
 		UpdatedAt:    r.UpdatedAt,
 	}

@@ -10,6 +10,11 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// handleSyncActive GET /api/sync/active 正在复制的文件实时进度（内存态，供前端进度条）
+func (s *Server) handleSyncActive(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, alistsync.ListCopyProgress())
+}
+
 func (s *Server) handleGetSyncQueue(w http.ResponseWriter, _ *http.Request) {
 	store := storage.GlobalStore()
 	if store == nil {

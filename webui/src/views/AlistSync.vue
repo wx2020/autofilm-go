@@ -5,6 +5,19 @@
       按配置的目录对同步 Alist/OpenList 文件，支持任务队列、失败重试和状态追踪。
     </div>
     <ModuleConfigEditor type="alistsync" :defaults="defaults" @changed="load" />
+    <div v-if="active.length" class="mb-3">
+      <div v-for="a in active" :key="a.config_id + a.file" class="card mb-2">
+        <div class="card-body py-2">
+          <div class="d-flex justify-content-between small mb-1">
+            <span class="font-monospace text-truncate" style="max-width:70%">{{ a.file }}</span>
+            <span class="text-muted">{{ a.config_id }} · {{ Math.floor(a.progress) }}%</span>
+          </div>
+          <div class="progress" style="height: 8px">
+            <div class="progress-bar progress-bar-striped progress-bar-animated" :style="{ width: Math.min(100, Math.max(0, a.progress)) + '%' }"></div>
+          </div>
+        </div>
+      </div>
+    </div>
     <div class="table-responsive">
       <table class="table table-hover">
         <thead>
@@ -51,13 +64,15 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import ModuleCard from '../components/ModuleCard.vue'
 import ModuleConfigEditor from '../components/ModuleConfigEditor.vue'
 import { useRunningPoll } from '../useRunningPoll.js'
 
 const tasks = ref([])
 const syncModules = ref([])
+const active = ref([])
+let activeTimer = null
 const { schedulePoll } = useRunningPoll(load, syncModules)
 const defaults = { id: 'cloud-sync', enable: true, run_on_start: false, url: 'http://127.0.0.1:5244', username: '', password: '', token: '', pairs: [{ src: '/source', dst: '/target', delete_src: false, overwrite: 'if_newer' }], retry: { max_attempts: 10, backoff: 'expo', jitter: 0.2 }, qps_limit: 0, cron: '0 0 */2 * * *' }
 
@@ -106,6 +121,13 @@ async function removeTask(t) {
   load()
 }
 
+async function loadActive() {
+  try {
+    const res = await fetch('/api/sync/active')
+    if (res.ok) active.value = await res.json()
+  } catch (e) { console.error(e) }
+}
+
 async function triggerRun(m) {
   await fetch(`/api/modules/${m.type}/${m.id}/run`, { method: 'POST' })
   await load()
@@ -117,5 +139,10 @@ async function toggleModule(m) {
   load()
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadActive()
+  activeTimer = setInterval(loadActive, 3000)
+})
+onUnmounted(() => { if (activeTimer) clearInterval(activeTimer) })
 </script>
