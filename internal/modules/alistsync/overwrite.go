@@ -34,6 +34,11 @@ func ShouldOverwrite(policy OverwritePolicy, src, existing *alist.AlistPath) boo
 		}
 		srcModified := parseTime(src.Modified)
 		dstModified := parseTime(existing.Modified)
+		if srcModified.IsZero() || dstModified.IsZero() {
+			// 时间不可比（格式未知）：退化为大小比对，大小一致视为已同步，
+			// 避免一方零时间导致“永远更新/永远跳过”
+			return src.Size != existing.Size
+		}
 		return srcModified.After(dstModified)
 	default:
 		return false
@@ -41,12 +46,18 @@ func ShouldOverwrite(policy OverwritePolicy, src, existing *alist.AlistPath) boo
 }
 
 func parseTime(s string) time.Time {
-	t, err := time.Parse("2006-01-02T15:04:05.000000Z", s)
-	if err != nil {
-		t, err = time.Parse("2006-01-02T15:04:05Z", s)
-		if err != nil {
-			return time.Time{}
+	// RFC3339Nano 优先：覆盖 Z、+08:00 等时区偏移及小数秒（线上真实格式如 2026-09-08T23:19:04+08:00）；
+	// 老格式保留兼容。解析失败返回零时间，调用方按“未知”处理而非当作最旧。
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05.000000Z",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
 		}
 	}
-	return t
+	return time.Time{}
 }
