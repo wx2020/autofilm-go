@@ -60,6 +60,7 @@ func (s *Server) newRouter() http.Handler {
 			r.Post("/modules/{type}/{id}/run", s.handleRunModule)
 			r.Post("/modules/{type}/{id}/toggle", s.handleToggleModule)
 			r.Post("/sync/queue/retry/{tid}", s.handleRetrySyncTask)
+			r.Delete("/sync/queue/{tid}", s.handleDeleteSyncTask)
 			r.Post("/alerts/{id}/ack", s.handleAcknowledgeAlert)
 			r.Post("/alerts/ack-all", s.handleAcknowledgeAllAlerts)
 			r.Post("/configs/{type}", s.handleSaveDbConfig)

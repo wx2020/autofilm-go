@@ -31,9 +31,13 @@
             <td>{{ t.attempts }}</td>
             <td class="text-truncate text-danger" style="max-width:200px">{{ t.last_error }}</td>
             <td>
-              <button class="btn btn-sm btn-outline-primary" @click="retry(t.id)"
+              <button class="btn btn-sm btn-outline-primary me-1" @click="retry(t.id)"
                       :disabled="t.state === 'running' || t.state === 'succeeded'">
                 <i class="bi-arrow-repeat"></i> 重试
+              </button>
+              <button class="btn btn-sm btn-outline-danger" @click="removeTask(t)"
+                      :disabled="t.state === 'running'">
+                <i class="bi-trash"></i> 删除
               </button>
             </td>
           </tr>
@@ -89,6 +93,16 @@ async function load() {
 
 async function retry(tid) {
   await fetch(`/api/sync/queue/retry/${tid}`, { method: 'POST' })
+  load()
+}
+
+async function removeTask(t) {
+  if (!confirm(`确定删除同步任务“${t.dst_path}”吗？`)) return
+  const res = await fetch(`/api/sync/queue/${t.id}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}))
+    alert(d.error || '删除失败')
+  }
   load()
 }
 
