@@ -26,7 +26,8 @@ func ShouldOverwrite(policy OverwritePolicy, src, existing *alist.AlistPath) boo
 	case OverwriteAlways:
 		return true
 	case OverwriteNever:
-		return false
+		// 缺失仍需复制一份，存在才跳过；否则 never 永远不同步
+		return existing == nil
 	case OverwriteIfNewer:
 		if existing == nil {
 			return true

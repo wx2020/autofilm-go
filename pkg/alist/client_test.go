@@ -270,3 +270,42 @@ func TestAddOfflineDownloadUsesV4API(t *testing.T) {
 		}
 	}
 }
+
+func TestFSCopyUsesCopyAPI(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		buf := make([]byte, 4096)
+		n, _ := r.Body.Read(buf)
+		gotBody = string(buf[:n])
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/auth/login":
+			w.Write([]byte(`{"code":200,"message":"success","data":{"token":"tk"}}`))
+		case "/api/me":
+			w.Write([]byte(`{"code":200,"message":"success","data":{"base_path":"/","id":1}}`))
+		case "/api/fs/copy":
+			w.Write([]byte(`{"code":200,"message":"success","data":null}`))
+		default:
+			w.WriteHeader(404)
+			w.Write([]byte(`<html>404</html>`))
+		}
+	}))
+	defer srv.Close()
+
+	c, err := NewStandalone(srv.URL, "u", "p", "")
+	if err != nil {
+		t.Fatalf("创建客户端: %v", err)
+	}
+	if err := c.FSCopy(t.Context(), "/pt/wo", "/wo", []string{"a.mkv"}); err != nil {
+		t.Fatalf("FSCopy: %v", err)
+	}
+	if gotMethod != "POST" || gotPath != "/api/fs/copy" {
+		t.Fatalf("应调 POST /api/fs/copy，got %s %s", gotMethod, gotPath)
+	}
+	for _, want := range []string{`"src_dir":"/pt/wo"`, `"dst_dir":"/wo"`, `"names":["a.mkv"]`} {
+		if !contains(gotBody, want) {
+			t.Fatalf("请求体缺 %s，got: %s", want, gotBody)
+		}
+	}
+}
