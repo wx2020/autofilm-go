@@ -26,9 +26,29 @@ type RetryDaemon struct {
 	activeMu    sync.RWMutex
 }
 
+// liveDaemons 存活守护协程表：Web 删除队列任务时需同步移出内存表，
+// 否则下轮 poll 会把已删行重新写活。
+var (
+	liveDaemonsMu sync.Mutex
+	liveDaemons   = map[*RetryDaemon]struct{}{}
+)
+
+// DropTaskFromDaemons 从所有存活守护协程的内存表中移除任务（Web 删除队列任务时调用）
+func DropTaskFromDaemons(taskID string) {
+	liveDaemonsMu.Lock()
+	daemons := make([]*RetryDaemon, 0, len(liveDaemons))
+	for d := range liveDaemons {
+		daemons = append(daemons, d)
+	}
+	liveDaemonsMu.Unlock()
+	for _, d := range daemons {
+		d.RemoveTask(taskID)
+	}
+}
+
 // NewRetryDaemon 创建守护重试协程
 func NewRetryDaemon(client *alist.AlistClient, queue *QueueManager, config *RetryConfig, logger *logrus.Logger) *RetryDaemon {
-	return &RetryDaemon{
+	d := &RetryDaemon{
 		client:      client,
 		queue:       queue,
 		config:      config,
@@ -36,6 +56,10 @@ func NewRetryDaemon(client *alist.AlistClient, queue *QueueManager, config *Retr
 		stopCh:      make(chan struct{}),
 		activeTasks: make(map[string]*SyncTask),
 	}
+	liveDaemonsMu.Lock()
+	liveDaemons[d] = struct{}{}
+	liveDaemonsMu.Unlock()
+	return d
 }
 
 // Start 启动守护协程（幂等：重复调用不会启动第二个轮询循环）
@@ -52,6 +76,9 @@ func (d *RetryDaemon) Stop() {
 		close(d.stopCh)
 	})
 	d.wg.Wait()
+	liveDaemonsMu.Lock()
+	delete(liveDaemons, d)
+	liveDaemonsMu.Unlock()
 }
 
 // AddTask 添加任务到守护协程跟踪
