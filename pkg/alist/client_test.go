@@ -309,3 +309,67 @@ func TestFSCopyUsesCopyAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskTerminal(t *testing.T) {
+	cases := []struct {
+		state             string
+		terminal, success bool
+	}{
+		{"2", true, true},
+		{"succeeded", true, true},
+		{"Success", true, true},
+		{"4", true, false},
+		{"7", true, false},
+		{"failed", true, false},
+		{"canceled", true, false},
+		{"0", false, false},
+		{"1", false, false},
+		{"running", false, false},
+		{"", false, false},
+		{"mystery-state", false, false},
+	}
+	for _, c := range cases {
+		if terminal, success := TaskTerminal(c.state); terminal != c.terminal || success != c.success {
+			t.Errorf("state %q: got (%v,%v) want (%v,%v)", c.state, terminal, success, c.terminal, c.success)
+		}
+	}
+}
+
+func TestListTasks(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.Method + " " + r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/auth/login":
+			w.Write([]byte(`{"code":200,"message":"success","data":{"token":"tk"}}`))
+		case "/api/me":
+			w.Write([]byte(`{"code":200,"message":"success","data":{"base_path":"/","id":1}}`))
+		case "/api/admin/task/copy/undone":
+			w.Write([]byte(`{"code":200,"message":"success","data":[{"id":"c1","name":"copy a to b","state":1,"status":"running","progress":12.5,"total_bytes":100}]}`))
+		default:
+			w.WriteHeader(404)
+			w.Write([]byte(`<html>404</html>`))
+		}
+	}))
+	defer srv.Close()
+
+	c, err := NewStandalone(srv.URL, "u", "p", "")
+	if err != nil {
+		t.Fatalf("创建客户端: %v", err)
+	}
+	list, err := c.ListTasks(t.Context(), "copy", false)
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if gotPath != "GET /api/admin/task/copy/undone" {
+		t.Fatalf("应调 GET /api/admin/task/copy/undone，got %s", gotPath)
+	}
+	if len(list) != 1 || list[0].ID != "c1" || list[0].Progress != 12.5 || list[0].TotalBytes != 100 {
+		t.Fatalf("解析错误: %+v", list)
+	}
+	if terminal, _ := TaskTerminal(list[0].State); terminal {
+		t.Fatalf("state=1 不应判终态")
+	}
+}
+
