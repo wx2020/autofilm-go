@@ -44,11 +44,17 @@ func (as *Alissync) syncPair(ctx context.Context, pair PairConfig) error {
 	for _, f := range srcFiles {
 		dstPath := replacePrefix(f.FullPath, pair.Src, pair.Dst)
 
-		// 检查目标是否存在（不存在为正常预期，不打 ERROR）
+		// 检查目标是否存在（不存在为正常预期，不打 ERROR）。
+		// 探测失败（EOF/限流等）则本轮跳过该文件：按不存在继续会误触发复制，
+		// 撞上已存在目标就是一次 403 报错，白白记一次失败。
 		existing, err := as.client.FSGet(ctx, dstPath)
-		if err != nil && !alist.IsNotFound(err) {
-			as.logger.Warnf("检查目标状态失败 %s: %v（按需同步继续）", dstPath, err)
-			existing = nil
+		if err != nil {
+			if alist.IsNotFound(err) {
+				existing = nil
+			} else {
+				as.logger.Warnf("检查目标状态失败，跳过 %s: %v", dstPath, err)
+				continue
+			}
 		}
 
 		// 应用覆盖策略

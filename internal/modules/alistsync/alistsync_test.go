@@ -47,6 +47,34 @@ func TestNewAppliesQPSLimit(t *testing.T) {
 	}
 }
 
+// TestIfNewerWithRealWorldTimeFormat 线上真实格式（+08:00 时区偏移）必须可比，
+// 不可比时退化为大小比对，不能一方零时间就永远复制。
+func TestIfNewerWithRealWorldTimeFormat(t *testing.T) {
+	mk := func(mod string, size int64) *alist.AlistPath {
+		return &alist.AlistPath{Modified: mod, Size: size}
+	}
+	// 源新 → 复制
+	if !ShouldOverwrite(OverwriteIfNewer,
+		mk("2026-09-08T23:28:50+08:00", 100), mk("2026-09-08T23:19:04+08:00", 100)) {
+		t.Fatal("新源应复制")
+	}
+	// 源旧 → 跳过（原来两边都解析失败变零时间，看似跳过实则误打误撞）
+	if ShouldOverwrite(OverwriteIfNewer,
+		mk("2026-09-08T23:19:04+08:00", 100), mk("2026-09-08T23:28:50+08:00", 100)) {
+		t.Fatal("旧源不应复制")
+	}
+	// 时间不可比 + 大小一致 → 跳过
+	if ShouldOverwrite(OverwriteIfNewer,
+		mk("not-a-time", 100), mk("2026-09-08T23:28:50+08:00", 100)) {
+		t.Fatal("大小一致应跳过")
+	}
+	// 时间不可比 + 大小不同 → 复制
+	if !ShouldOverwrite(OverwriteIfNewer,
+		mk("not-a-time", 101), mk("2026-09-08T23:28:50+08:00", 100)) {
+		t.Fatal("大小不同应复制")
+	}
+}
+
 func TestShouldOverwrite(t *testing.T) {
 	src := &alist.AlistPath{Modified: "2026-07-28T10:00:00Z"}
 	old := &alist.AlistPath{Modified: "2026-07-27T10:00:00Z"}
